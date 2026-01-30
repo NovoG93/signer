@@ -32,9 +32,9 @@ func main() {
 		log.Fatal(err, "unable to start manager")
 	}
 
-	// Initialize the CA (simple self-signed for the lab)
-	// In prod, you would load these from a Secret or Vault
-	ca, err := NewLabCA()
+	// Initialize the CA
+	// TODO: Load from a secret
+	ca, err := NewCA()
 	if err != nil {
 		log.Fatal(err, "failed to init CA")
 	}

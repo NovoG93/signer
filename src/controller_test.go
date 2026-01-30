@@ -41,9 +41,9 @@ var _ = Describe("SignerReconciler", func() {
 })
 
 var _ = Describe("CA Helper", func() {
-	Describe("TestNewLabCACertIsValid", func() {
+	Describe("TestNewCACertIsValid", func() {
 		It("should return CAHelper with valid x509.Certificate", func() {
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ca).NotTo(BeNil())
@@ -54,9 +54,9 @@ var _ = Describe("CA Helper", func() {
 		})
 	})
 
-	Describe("TestNewLabCAKeyIsRSA2048", func() {
+	Describe("TestNewCAKeyIsRSA2048", func() {
 		It("should return RSA 2048 private key", func() {
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ca).NotTo(BeNil())
@@ -67,9 +67,9 @@ var _ = Describe("CA Helper", func() {
 		})
 	})
 
-	Describe("TestNewLabCACommonName", func() {
+	Describe("TestNewCACommonName", func() {
 		It("should set certificate Subject CommonName to LabSignerRoot", func() {
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ca).NotTo(BeNil())
@@ -78,9 +78,9 @@ var _ = Describe("CA Helper", func() {
 		})
 	})
 
-	Describe("TestNewLabCAIsRoot", func() {
+	Describe("TestNewCAIsRoot", func() {
 		It("should set certificate as CA with no path length constraint", func() {
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ca).NotTo(BeNil())
@@ -90,10 +90,10 @@ var _ = Describe("CA Helper", func() {
 		})
 	})
 
-	Describe("TestNewLabCAValidityPeriod", func() {
+	Describe("TestNewCAValidityPeriod", func() {
 		It("should set certificate validity to 10 years", func() {
 			before := time.Now()
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 			after := time.Now()
 
 			Expect(err).NotTo(HaveOccurred())
@@ -154,7 +154,7 @@ var _ = Describe("Reconciler Filtering", func() {
 				Build()
 
 			// Create reconciler with fake client
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{
@@ -221,7 +221,7 @@ var _ = Describe("Reconciler Filtering", func() {
 				Build()
 
 			// Create reconciler with fake client
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{
@@ -286,7 +286,7 @@ var _ = Describe("Reconciler Filtering", func() {
 				Build()
 
 			// Create reconciler with fake client and CA
-			ca, err := NewLabCA()
+			ca, err := NewCA()
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{

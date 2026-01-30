@@ -65,6 +65,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Calculate Timings (matching your script's logic)
 	now := time.Now()
+	// TODO: Set timings via ENV variables and helm values
 	notAfter := now.Add(time.Hour * 1) // 1 Hour Validity
 	refreshAt := now.Add(time.Minute * 30)
 

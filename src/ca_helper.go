@@ -10,14 +10,14 @@ import (
 	"time"
 )
 
-// NewLabCA generates an in-memory self-signed root CA certificate for the lab signer.
+// NewCA generates an in-memory self-signed root CA certificate for the lab signer.
 // It creates an RSA 2048-bit private key and a corresponding x509 certificate
 // with 10 year validity period. The certificate is suitable for signing child certificates.
 //
 // Returns:
 // - *CAHelper: Contains the generated x509.Certificate and RSA private key
 // - error: If key generation or certificate creation fails
-func NewLabCA() (*CAHelper, error) {
+func NewCA() (*CAHelper, error) {
 	// Step 1: Generate RSA 2048-bit private key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
