@@ -68,13 +68,13 @@ var _ = Describe("CA Helper", func() {
 	})
 
 	Describe("TestNewCACommonName", func() {
-		It("should set certificate Subject CommonName to LabSignerRoot", func() {
+		It("should set certificate Subject CommonName to NovoG93 Signer CA", func() {
 			ca, err := NewCA()
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ca).NotTo(BeNil())
 			Expect(ca.Cert).NotTo(BeNil())
-			Expect(ca.Cert.Subject.CommonName).To(Equal("LabSignerRoot"))
+			Expect(ca.Cert.Subject.CommonName).To(Equal("NovoG93 Signer CA"))
 		})
 	})
 

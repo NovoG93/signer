@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// NewCA generates an in-memory self-signed root CA certificate for the lab signer.
+// NewCA generates an in-memory self-signed root CA certificate for the novog93/signer.
 // It creates an RSA 2048-bit private key and a corresponding x509 certificate
 // with 10 year validity period. The certificate is suitable for signing child certificates.
 //
@@ -34,7 +34,7 @@ func NewCA() (*CAHelper, error) {
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: "LabSignerRoot",
+			CommonName: "NovoG93 Signer CA",
 		},
 		NotBefore:             now,
 		NotAfter:              now.AddDate(10, 0, 0), // 10 years validity

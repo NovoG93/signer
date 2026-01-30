@@ -106,7 +106,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			Type:               "Issued",
 			Status:             metav1.ConditionTrue,
 			Reason:             "IssuedByGoController",
-			Message:            "Signed by Lab Signer Controller",
+			Message:            "Signed by NovoG93 Signer Controller",
 			LastTransitionTime: metav1.Now(),
 		},
 	}
