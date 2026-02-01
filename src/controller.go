@@ -75,7 +75,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Phase 6: Validate Proof of Possession
 	if err := validateProofOfPossession(pcr.Spec.ProofOfPossession, pub); err != nil {
-		log.Error(err, "POP validation failed", "name", req.Name)
+		log.Error(err, "POP validation failed", "name", req.Name, "pop_length", len(pcr.Spec.ProofOfPossession), "pop_first_chars", string(pcr.Spec.ProofOfPossession[:min(50, len(pcr.Spec.ProofOfPossession))]))
 		return ctrl.Result{}, err
 	}
 
