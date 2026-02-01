@@ -35,7 +35,7 @@ jobs:
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
           else
-            VERSION="latest"
+            VERSION="'latest'"
           fi
           echo "Setting version to ${VERSION}"
           sed -i "s/^version: .*/version: ${VERSION}/" signer/Chart.yaml
