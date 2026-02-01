@@ -199,7 +199,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					Namespace: "default",
 				},
 				Spec: certificatesv1beta1.PodCertificateRequestSpec{
-					SignerName:         SignerName, // Our signer
+					SignerName:         "novog93.ghcr/signer", // Our signer
 					PodName:            "test-pod",
 					PodUID:             "test-uid",
 					NodeName:           "test-node",
@@ -225,8 +225,9 @@ var _ = Describe("Reconciler Filtering", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{
-				Client: fakeClient,
-				CA:     ca,
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
 			}
 
 			// Call Reconcile
@@ -263,7 +264,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					Namespace: "default",
 				},
 				Spec: certificatesv1beta1.PodCertificateRequestSpec{
-					SignerName:         SignerName, // Our signer
+					SignerName:         "novog93.ghcr/signer", // Our signer
 					PodName:            "example-pod",
 					PodUID:             "pod-uid-12345",
 					NodeName:           "node-1",
@@ -290,8 +291,9 @@ var _ = Describe("Reconciler Filtering", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{
-				Client: fakeClient,
-				CA:     ca,
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
 			}
 
 			// Call Reconcile

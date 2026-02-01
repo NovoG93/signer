@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -39,9 +40,17 @@ func main() {
 		log.Fatal(err, "failed to init CA")
 	}
 
+	// Get signer name from environment variable with default fallback
+	signerName := os.Getenv("SIGNER_NAME")
+	if signerName == "" {
+		signerName = "novog93.ghcr/signer" // Default signer name
+	}
+	log.Printf("Using signer name: %s", signerName)
+
 	if err = (&SignerReconciler{
-		Client: mgr.GetClient(),
-		CA:     ca,
+		Client:     mgr.GetClient(),
+		CA:         ca,
+		SignerName: signerName,
 	}).SetupWithManager(mgr); err != nil {
 		log.Fatal(err, "unable to create controller")
 	}

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// NewCA generates an in-memory self-signed root CA certificate for the novog93/signer.
+// NewCA generates an in-memory self-signed root CA certificate for the novog93.ghcr/signer.
 // It creates an RSA 2048-bit private key and a corresponding x509 certificate
 // with 10 year validity period. The certificate is suitable for signing child certificates.
 //

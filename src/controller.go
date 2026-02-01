@@ -17,10 +17,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	SignerName = "novog93/signer"
-)
-
 // CAHelper holds our Authority
 type CAHelper struct {
 	Cert *x509.Certificate
@@ -30,7 +26,8 @@ type CAHelper struct {
 // SignerReconciler watches PCRs
 type SignerReconciler struct {
 	client.Client
-	CA *CAHelper
+	CA         *CAHelper
+	SignerName string
 }
 
 // Reconcile is the loop. It receives a Name/Namespace and decides what to do.
@@ -41,7 +38,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// 1. Filter: Is this for us?
-	if pcr.Spec.SignerName != SignerName {
+	if pcr.Spec.SignerName != r.SignerName {
 		return ctrl.Result{}, nil
 	}
 
