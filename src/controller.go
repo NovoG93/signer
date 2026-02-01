@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -17,12 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
-
-// CAHelper holds our Authority
-type CAHelper struct {
-	Cert *x509.Certificate
-	Key  *rsa.PrivateKey
-}
 
 // SignerReconciler watches PCRs
 type SignerReconciler struct {
@@ -86,7 +79,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	}
 
-	certBytes, err := x509.CreateCertificate(rand.Reader, &template, r.CA.Cert, pub, r.CA.Key)
+	certBytes, err := x509.CreateCertificate(rand.Reader, &template, r.CA.GetCert(), pub, r.CA.GetKey())
 	if err != nil {
 		return ctrl.Result{}, err
 	}

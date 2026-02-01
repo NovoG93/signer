@@ -117,3 +117,36 @@ func TestLoadConfig_PodNamespaceFallback(t *testing.T) {
 		t.Errorf("expected LeaderElectionNamespace 'explicit-ns', got %q", config.LeaderElectionNamespace)
 	}
 }
+
+func TestLoadConfig_CASecretDefaults(t *testing.T) {
+	getEnv := func(key string) string { return "" }
+	config := LoadConfig(getEnv)
+
+	if config.CASecretName != "" {
+		t.Errorf("expected CASecretName empty, got %q", config.CASecretName)
+	}
+}
+
+func TestLoadConfig_CASecretOverrides(t *testing.T) {
+	env := map[string]string{
+		"CA_SECRET_NAME":      "my-secret",
+		"CA_SECRET_NAMESPACE": "my-ns",
+		"CA_CERT_KEY":         "my.crt",
+		"CA_KEY_KEY":          "my.key",
+	}
+	getEnv := func(key string) string { return env[key] }
+	config := LoadConfig(getEnv)
+
+	if config.CASecretName != "my-secret" {
+		t.Errorf("expected CASecretName 'my-secret', got %q", config.CASecretName)
+	}
+	if config.CASecretNamespace != "my-ns" {
+		t.Errorf("expected CASecretNamespace 'my-ns', got %q", config.CASecretNamespace)
+	}
+	if config.CACertKey != "my.crt" {
+		t.Errorf("expected CACertKey 'my.crt', got %q", config.CACertKey)
+	}
+	if config.CAKeyKey != "my.key" {
+		t.Errorf("expected CAKeyKey 'my.key', got %q", config.CAKeyKey)
+	}
+}

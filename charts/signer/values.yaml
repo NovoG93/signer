@@ -1,8 +1,10 @@
+# HA Configuration: Set replicaCount > 1 for high-availability deployments
+# Leader election will ensure only one replica signs certificates at a time
 replicaCount: 1
 
 image:
   repository: ghcr.io/novog93/signer
-  tag: "0.0"
+  tag: latest
   pullPolicy: Always
 
 nameOverride: ""
@@ -74,9 +76,11 @@ volumes: []
 env:
   signerName: "novog93.ghcr/signer"
   logLevel: "info"
-  # Leader Election & HA
+  # Leader Election & HA (enabled by default for multi-replica safety)
   leaderElection: "true"
   leaderElectionID: "signer-controller"
+  # Pod namespace (injected via downward API, do not override)
+  podNamespace: ""
   # Metrics & Health Probes
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
