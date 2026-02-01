@@ -1,0 +1,58 @@
+name: Release Helm Chart
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'chart-v*'
+    paths:
+      - 'charts/signer/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Set Chart Version
+        working-directory: ./charts
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="latest"
+          fi
+          echo "Setting version to ${VERSION}"
+          sed -i "s/^version: .*/version: ${VERSION}/" signer/Chart.yaml
+          sed -i "s/^appVersion: .*/appVersion: \"${VERSION}\"/" signer/Chart.yaml
+          cat signer/Chart.yaml
+
+      - name: Package Chart
+        working-directory: ./charts
+        run: helm package signer
+
+      - name: Push Chart
+        working-directory: ./charts
+        run: |
+          export OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          for pkg in *.tgz; do
+            if [ -f "$pkg" ]; then
+              echo "Pushing ${pkg} to oci://ghcr.io/${OWNER_LC}/charts"
+              helm push "${pkg}" "oci://ghcr.io/${OWNER_LC}/charts"
+            fi
+          done

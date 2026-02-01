@@ -5,7 +5,7 @@
 
 			"type": "shell",
 			"label": "Build: make build",
-			"command": "cd ${workspaceFolder} && pwd ; make build",
+			"command": "cd ${workspaceFolder}; make build",
 			"problemMatcher": [
 				"$go"
 			],
@@ -13,12 +13,12 @@
 				"kind": "build",
 				"isDefault": true
 			},
-			"detail": "cd ${workspaceFolder} && pwd ; make build"
+			"detail": "cd ${workspaceFolder}; make build"
 		},
 		{
 			"type": "shell",
 			"label": "Test",
-			"command": "cd ${workspaceFolder} && pwd ; make test",
+			"command": "cd ${workspaceFolder}; make test",
 			"problemMatcher": [
 				"$go"
 			],
@@ -26,7 +26,20 @@
 				"kind": "test",
 				"isDefault": true
 			},
-			"detail": "cd ${workspaceFolder} && pwd ; make test"
+			"detail": "cd ${workspaceFolder}; make test"
+		},
+		{
+			"type": "shell",
+			"label": "Coverage",
+			"command": "cd ${workspaceFolder}; make coverage",
+			"problemMatcher": [
+				"$go"
+			],
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"detail": "cd ${workspaceFolder}; make coverage"
 		}
 	]
 }
