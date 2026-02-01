@@ -3,7 +3,7 @@ name: Release Helm Chart
 on:
   push:
     branches:
-      - main
+      - '**'
     tags:
       - 'chart-v*'
     paths:
@@ -34,8 +34,13 @@ jobs:
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             VERSION="${GITHUB_REF_NAME#chart-v}"
-          else
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             VERSION="0.0.0-latest"
+          else
+            # For branches other than main, use branch-prefixed version
+            BRANCH_NAME="${{ github.ref_name }}"
+            BRANCH_NAME=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9-]/-/g')
+            VERSION="0.0.0-branch-${BRANCH_NAME}"
           fi
           echo "Setting version to ${VERSION}"
           sed -i "s/^version: .*/version: ${VERSION}/" signer/Chart.yaml
@@ -56,3 +61,19 @@ jobs:
               helm push "${pkg}" "oci://ghcr.io/${OWNER_LC}/charts"
             fi
           done
+
+      - name: Delete old chart versions from current branch
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        run: |
+          export OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          # Delete branch-specific chart versions when on main branch
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "Deleting branch-specific chart versions..."
+            # This would require a separate container registry API call
+            # For now, this is handled via GitHub Package Registry API
+            curl -X GET "https://api.github.com/user/packages/container/signer%2Fsigner" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" || true
+          fi

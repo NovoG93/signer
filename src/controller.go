@@ -70,7 +70,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Calculate Timings (matching your script's logic)
 	now := time.Now()
-	// TODO: Set timings via ENV variables and helm values
+	// TODO: Set timings via cli args/env variables and helm values
 	notAfter := now.Add(time.Hour * 1) // 1 Hour Validity
 	refreshAt := now.Add(time.Minute * 30)
 
@@ -97,7 +97,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Note: status.certificateChain expects RAW PEM string, not base64 encoded
 	pcr.Status.CertificateChain = string(certPEM)
 
-	// Set the required time fields (The fields you debugged!)
+	// Set the required time fields
 	metaNow := metav1.NewTime(now)
 	metaRefresh := metav1.NewTime(refreshAt)
 	metaAfter := metav1.NewTime(notAfter)

@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     branches:
-      - main
+      - '**'
     tags:
       - 'v*'
   pull_request:
@@ -24,6 +24,9 @@ jobs:
     uses: ./.github/workflows/docker.yml
     needs: [test]
     if: github.event_name != 'pull_request'
+    with:
+      is_main_branch: ${{ github.ref == 'refs/heads/main' }}
+      branch_name: ${{ github.ref_name }}
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       registry_username: ${{ github.actor }}
