@@ -1,0 +1,32 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+
+			"type": "shell",
+			"label": "Build: make build",
+			"command": "cd ${workspaceFolder} && pwd ; make build",
+			"problemMatcher": [
+				"$go"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"detail": "cd ${workspaceFolder} && pwd ; make build"
+		},
+		{
+			"type": "shell",
+			"label": "Test",
+			"command": "cd ${workspaceFolder} && pwd ; make test",
+			"problemMatcher": [
+				"$go"
+			],
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"detail": "cd ${workspaceFolder} && pwd ; make test"
+		}
+	]
+}

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -48,13 +49,22 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// 3. Parse the Public Key from the PCR
-	block, _ := pem.Decode([]byte(pcr.Spec.PKIXPublicKey))
-	if block == nil {
+	// First: base64 decode the PKIX public key (Kubernetes stores it as base64 bytes)
+	pubKeyBytes, err := base64.StdEncoding.DecodeString(string(pcr.Spec.PKIXPublicKey))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to base64 decode public key: %w", err)
+	}
+
+	// Second: PEM decode
+	pubKeyPEM, _ := pem.Decode(pubKeyBytes)
+	if pubKeyPEM == nil {
 		return ctrl.Result{}, fmt.Errorf("failed to parse PEM block containing the public key")
 	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+
+	// Third: Parse the actual public key
+	pub, err := x509.ParsePKIXPublicKey(pubKeyPEM.Bytes)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
 
 	// 4. Create the Certificate (Go Crypto)

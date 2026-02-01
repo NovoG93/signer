@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"testing"
 	"time"
 
@@ -20,6 +25,43 @@ import (
 func TestController(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Controller Suite")
+}
+
+// generateTestPublicKeyDER creates a test RSA public key in DER format (PKIX)
+func generateTestPublicKeyDER() ([]byte, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	// Export public key in PKIX/DER format
+	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return pubBytes, nil
+}
+
+// generateTestPublicKeyBase64PEM creates a test RSA public key in base64-encoded PEM format
+// This matches what Kubernetes kubelet sends in PodCertificateRequest.Spec.PKIXPublicKey
+// Returns the base64-encoded bytes that should be stored in PKIXPublicKey field
+func generateTestPublicKeyBase64PEM() ([]byte, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	// Export public key in PKIX/DER format
+	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	// Encode as PEM
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubBytes,
+	})
+	// Base64 encode (as Kubernetes does)
+	base64Encoded := base64.StdEncoding.EncodeToString(pemBytes)
+	return []byte(base64Encoded), nil
 }
 
 var _ = Describe("SignerReconciler", func() {
@@ -129,6 +171,9 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileIgnoresOtherSigners", func() {
 		It("should ignore requests from other signers and return no error", func() {
 			// Create a PCR with a different signer
+			pubKey, err := generateTestPublicKeyBase64PEM()
+			Expect(err).NotTo(HaveOccurred())
+
 			pcr := &certificatesv1beta1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pcr-other-signer",
@@ -142,7 +187,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					NodeUID:            "test-node-uid",
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid",
-					PKIXPublicKey:      []byte("-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANDiE2Zr5NF4UvvWXHwhjAGT5bLvHAR5\nDZ5bQDEP2phfIiSFpBaLvlMDEtBY1YCf7P4/pQaW1Yb7iSnKmlGhCUkCAwEAAQ==\n-----END PUBLIC KEY-----"),
+					PKIXPublicKey:      pubKey,
 					ProofOfPossession:  []byte("some-proof"),
 				},
 			}
@@ -158,8 +203,9 @@ var _ = Describe("Reconciler Filtering", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			reconciler := &SignerReconciler{
-				Client: fakeClient,
-				CA:     ca,
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
 			}
 
 			// Call Reconcile
@@ -192,6 +238,8 @@ var _ = Describe("Reconciler Filtering", func() {
 		It("should ignore already-signed requests for our signer", func() {
 			// Create a PCR with our signer but already signed
 			dummyCert := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHfzfCKvWQMA0GCSqGSIb3DQEBBQUAMBMxETAPBgNVBAMMCExh\nYlNpZ25lclJvb3QwHhcNMjEwNzIxMTgzODEwWhcNMzEwNzE5MTgzODEwWjATMREw\nDwYDVQQDDAhMYWJTaWduZXIwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBAPFk\nZ1w5s3Y6+LcUzXsWKmVZBgjhFMU2P0c7lxj7W3sW3QKkfSIJWaWLQ8FfNgCWJkkK\n8L6K7HJA7zB6dRFwYW8+N3tMwIABjELcA83ynHZj0/kJ0cQmxQnuPQO4B1EiQxLd\nL5a/wE+3qKKRvB6KSqGsKVf1C0VUDc5XkrFQ7qApAgMBAAEwDQYJKoZIhvcNAQEF\nBQADgYEARN6UJPvJmLhP5N9qJaW5c9NLGpKDg6o4PNPF5GLkFvBL7AiKRQ7A0U2p\nPf8IlUzF3fT/TvLgZBJ7k5/m7kC82bZ3zJ7gHKQJCKqKCVHf3Rk/N3KrJ/+LaLAW\nsL7YhO3DqWdCJ8C9aGe0JTR1K5nfKQ9VqKzRx1aDhEeIIDSLuGM=\n-----END CERTIFICATE-----"
+			pubKey, err := generateTestPublicKeyBase64PEM()
+			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{
@@ -206,7 +254,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					NodeUID:            "test-node-uid",
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid",
-					PKIXPublicKey:      []byte("-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANDiE2Zr5NF4UvvWXHwhjAGT5bLvHAR5\nDZ5bQDEP2phfIiSFpBaLvlMDEtBY1YCf7P4/pQaW1Yb7iSnKmlGhCUkCAwEAAQ==\n-----END PUBLIC KEY-----"),
+					PKIXPublicKey:      pubKey,
 					ProofOfPossession:  []byte("some-proof"),
 				},
 				Status: certificatesv1beta1.PodCertificateRequestStatus{
@@ -258,6 +306,9 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileProcessesTargetSigner", func() {
 		It("should attempt to process requests from our signer when not yet signed", func() {
 			// Create a PCR with our signer and NO certificate yet
+			pubKeyBase64PEM, err := generateTestPublicKeyBase64PEM()
+			Expect(err).NotTo(HaveOccurred())
+
 			pcr := &certificatesv1beta1.PodCertificateRequest{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-pcr-to-sign",
@@ -271,7 +322,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					NodeUID:            "node-uid-67890",
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid-abc",
-					PKIXPublicKey:      []byte("-----BEGIN PUBLIC KEY-----\nMFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANDiE2Zr5NF4UvvWXHwhjAGT5bLvHAR5\nDZ5bQDEP2phfIiSFpBaLvlMDEtBY1YCf7P4/pQaW1Yb7iSnKmlGhCUkCAwEAAQ==\n-----END PUBLIC KEY-----"),
+					PKIXPublicKey:      pubKeyBase64PEM,
 					ProofOfPossession:  []byte("some-proof"),
 				},
 				Status: certificatesv1beta1.PodCertificateRequestStatus{
