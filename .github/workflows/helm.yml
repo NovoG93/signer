@@ -33,9 +33,9 @@ jobs:
         working-directory: ./charts
         run: |
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${GITHUB_REF_NAME#chart-v}"
           else
-            VERSION="'latest'"
+            VERSION="0.0.0-latest"
           fi
           echo "Setting version to ${VERSION}"
           sed -i "s/^version: .*/version: ${VERSION}/" signer/Chart.yaml
