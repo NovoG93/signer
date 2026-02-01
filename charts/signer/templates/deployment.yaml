@@ -43,6 +43,26 @@ spec:
               value: "{{ .Values.env.signerName }}"
             - name: LOG_LEVEL
               value: "{{ .Values.env.logLevel }}"
+            - name: LEADER_ELECTION
+              value: "{{ .Values.env.leaderElection }}"
+            - name: LEADER_ELECTION_ID
+              value: "{{ .Values.env.leaderElectionID }}"
+            - name: METRICS_BIND_ADDRESS
+              value: "{{ .Values.env.metricsBindAddress }}"
+            - name: HEALTH_PROBE_BIND_ADDRESS
+              value: "{{ .Values.env.healthProbeBindAddress }}"
+            - name: CERT_VALIDITY
+              value: "{{ .Values.env.certValidity }}"
+            - name: CERT_REFRESH_BEFORE
+              value: "{{ .Values.env.certRefreshBefore }}"
+            - name: CA_SECRET_NAME
+              value: "{{ .Values.env.caSecretName }}"
+            - name: CA_SECRET_NAMESPACE
+              value: "{{ .Values.env.caSecretNamespace }}"
+            - name: CA_CERT_KEY
+              value: "{{ .Values.env.caCertKey }}"
+            - name: CA_KEY_KEY
+              value: "{{ .Values.env.caKeyKey }}"
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -25,11 +27,19 @@ func init() {
 	utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
 }
 
-func CreateManager(config *rest.Config, signerName string) (ctrl.Manager, error) {
-	mgr, err := newManagerFunc(config, ctrl.Options{
+func CreateManager(kubeConfig *rest.Config, config *Config) (ctrl.Manager, error) {
+	if kubeConfig == nil || config == nil {
+		return nil, fmt.Errorf("kubeConfig and config must not be nil")
+	}
+
+	mgrOptions := ctrl.Options{
 		Scheme:                 scheme,
-		HealthProbeBindAddress: ":8081",
-	})
+		HealthProbeBindAddress: config.HealthProbeBindAddress,
+		LeaderElection:         config.LeaderElection,
+		LeaderElectionID:       config.LeaderElectionID,
+	}
+
+	mgr, err := newManagerFunc(kubeConfig, mgrOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +60,8 @@ func CreateManager(config *rest.Config, signerName string) (ctrl.Manager, error)
 	if err = setupWithManagerFunc(&SignerReconciler{
 		Client:     mgr.GetClient(),
 		CA:         ca,
-		SignerName: signerName,
+		SignerName: config.SignerName,
+		Config:     config,
 	}, mgr); err != nil {
 		return nil, err
 	}

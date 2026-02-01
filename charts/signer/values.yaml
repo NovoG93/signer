@@ -73,4 +73,18 @@ volumes: []
 
 env:
   signerName: "novog93.ghcr/signer"
-  logLevel: debug
+  logLevel: "info"
+  # Leader Election & HA
+  leaderElection: "true"
+  leaderElectionID: "signer-controller"
+  # Metrics & Health Probes
+  metricsBindAddress: ":8080"
+  healthProbeBindAddress: ":8081"
+  # Certificate Validity & Refresh
+  certValidity: "1h"
+  certRefreshBefore: "30m"
+  # CA Secret Configuration (empty = in-memory CA)
+  caSecretName: ""
+  caSecretNamespace: ""
+  caCertKey: "ca.crt"
+  caKeyKey: "ca.key"

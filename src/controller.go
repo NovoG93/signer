@@ -29,6 +29,7 @@ type SignerReconciler struct {
 	client.Client
 	CA         *CAHelper
 	SignerName string
+	Config     *Config
 }
 
 // Reconcile is the loop. It receives a Name/Namespace and decides what to do.
