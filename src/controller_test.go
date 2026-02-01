@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
 	"testing"
 	"time"
@@ -41,10 +40,9 @@ func generateTestPublicKeyDER() ([]byte, error) {
 	return pubBytes, nil
 }
 
-// generateTestPublicKeyBase64PEM creates a test RSA public key in base64-encoded PEM format
-// This matches what Kubernetes kubelet sends in PodCertificateRequest.Spec.PKIXPublicKey
-// Returns the base64-encoded bytes that should be stored in PKIXPublicKey field
-func generateTestPublicKeyBase64PEM() ([]byte, error) {
+// generateTestPublicKeyPEM creates a test RSA public key in PEM format (as []byte)
+// This matches what Kubernetes kubelet sends in PodCertificateRequest.Spec.PKIXPublicKey (after base64 decoding)
+func generateTestPublicKeyPEM() ([]byte, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -59,9 +57,7 @@ func generateTestPublicKeyBase64PEM() ([]byte, error) {
 		Type:  "PUBLIC KEY",
 		Bytes: pubBytes,
 	})
-	// Base64 encode (as Kubernetes does)
-	base64Encoded := base64.StdEncoding.EncodeToString(pemBytes)
-	return []byte(base64Encoded), nil
+	return pemBytes, nil
 }
 
 var _ = Describe("SignerReconciler", func() {
@@ -171,7 +167,7 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileIgnoresOtherSigners", func() {
 		It("should ignore requests from other signers and return no error", func() {
 			// Create a PCR with a different signer
-			pubKey, err := generateTestPublicKeyBase64PEM()
+			pubKey, err := generateTestPublicKeyPEM()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -238,7 +234,7 @@ var _ = Describe("Reconciler Filtering", func() {
 		It("should ignore already-signed requests for our signer", func() {
 			// Create a PCR with our signer but already signed
 			dummyCert := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHfzfCKvWQMA0GCSqGSIb3DQEBBQUAMBMxETAPBgNVBAMMCExh\nYlNpZ25lclJvb3QwHhcNMjEwNzIxMTgzODEwWhcNMzEwNzE5MTgzODEwWjATMREw\nDwYDVQQDDAhMYWJTaWduZXIwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBAPFk\nZ1w5s3Y6+LcUzXsWKmVZBgjhFMU2P0c7lxj7W3sW3QKkfSIJWaWLQ8FfNgCWJkkK\n8L6K7HJA7zB6dRFwYW8+N3tMwIABjELcA83ynHZj0/kJ0cQmxQnuPQO4B1EiQxLd\nL5a/wE+3qKKRvB6KSqGsKVf1C0VUDc5XkrFQ7qApAgMBAAEwDQYJKoZIhvcNAQEF\nBQADgYEARN6UJPvJmLhP5N9qJaW5c9NLGpKDg6o4PNPF5GLkFvBL7AiKRQ7A0U2p\nPf8IlUzF3fT/TvLgZBJ7k5/m7kC82bZ3zJ7gHKQJCKqKCVHf3Rk/N3KrJ/+LaLAW\nsL7YhO3DqWdCJ8C9aGe0JTR1K5nfKQ9VqKzRx1aDhEeIIDSLuGM=\n-----END CERTIFICATE-----"
-			pubKey, err := generateTestPublicKeyBase64PEM()
+			pubKey, err := generateTestPublicKeyPEM()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -306,7 +302,7 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileProcessesTargetSigner", func() {
 		It("should attempt to process requests from our signer when not yet signed", func() {
 			// Create a PCR with our signer and NO certificate yet
-			pubKeyBase64PEM, err := generateTestPublicKeyBase64PEM()
+			pubKeyBase64PEM, err := generateTestPublicKeyPEM()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{

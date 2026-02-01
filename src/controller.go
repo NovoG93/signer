@@ -6,7 +6,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -16,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // CAHelper holds our Authority
@@ -33,6 +33,8 @@ type SignerReconciler struct {
 
 // Reconcile is the loop. It receives a Name/Namespace and decides what to do.
 func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
 	var pcr certificatesv1beta1.PodCertificateRequest
 	if err := r.Get(ctx, req.NamespacedName, &pcr); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -40,23 +42,24 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// 1. Filter: Is this for us?
 	if pcr.Spec.SignerName != r.SignerName {
+		log.V(1).Info("Ignoring request for different signer", "signer", pcr.Spec.SignerName)
 		return ctrl.Result{}, nil
 	}
 
 	// 2. Filter: Is it already signed?
 	if len(pcr.Status.CertificateChain) > 0 {
+		log.V(1).Info("Certificate already exists", "name", req.Name)
 		return ctrl.Result{}, nil
 	}
 
 	// 3. Parse the Public Key from the PCR
-	// First: base64 decode the PKIX public key (Kubernetes stores it as base64 bytes)
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(string(pcr.Spec.PKIXPublicKey))
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to base64 decode public key: %w", err)
-	}
+	// The Go client library automatically decodes the base64 JSON string into pcr.Spec.PKIXPublicKey ([]byte).
+	// So this byte slice already contains the raw PEM data (starting with -----BEGIN...).
 
-	// Second: PEM decode
-	pubKeyPEM, _ := pem.Decode(pubKeyBytes)
+	log.V(1).Info("Parsing public key...", "name", req.Name)
+
+	// PEM decode directly from the bytes
+	pubKeyPEM, _ := pem.Decode(pcr.Spec.PKIXPublicKey)
 	if pubKeyPEM == nil {
 		return ctrl.Result{}, fmt.Errorf("failed to parse PEM block containing the public key")
 	}
@@ -122,7 +125,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	fmt.Printf("✅ Issued cert for %s\n", req.Name)
+	log.Info("Certificate issued", "pod", req.Name, "node", pcr.Spec.NodeName)
 	return ctrl.Result{}, nil
 }
 

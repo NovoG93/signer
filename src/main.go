@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	"go.uber.org/zap/zapcore"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -24,7 +26,19 @@ func init() {
 }
 
 func main() {
-	ctrl.SetLogger(zap.New())
+	logLevel := os.Getenv("LOG_LEVEL")
+	var level zapcore.Level
+	if logLevel == "debug" {
+		level = zapcore.DebugLevel
+	} else {
+		level = zapcore.InfoLevel
+	}
+
+	opts := zap.Options{
+		Development: false,
+		Level:       level,
+	}
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
