@@ -23,7 +23,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("TestCreateManager_AcceptsConfig", func() {
+	It("TestCreateManager_LeaderElectionEnabled", func() {
 		// Mock manager creation to inspect options
 		origNewManagerFunc := newManagerFunc
 		defer func() { newManagerFunc = origNewManagerFunc }()
@@ -49,7 +49,50 @@ var _ = Describe("ManagerFactory Unit", func() {
 		}
 
 		customConfig := &Config{
-			LeaderElection:         true,
+			LeaderElection:          true,
+			LeaderElectionID:        "test-id",
+			LeaderElectionNamespace: "test-ns",
+			MetricsBindAddress:      ":9999",
+			HealthProbeBindAddress:  ":8888",
+			SignerName:              "test-signer",
+		}
+
+		_, err := CreateManager(&rest.Config{}, customConfig)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(capturedOptions.LeaderElection).To(BeTrue())
+		Expect(capturedOptions.LeaderElectionID).To(Equal("test-id"))
+		Expect(capturedOptions.LeaderElectionNamespace).To(Equal("test-ns"))
+		Expect(capturedOptions.HealthProbeBindAddress).To(Equal(":8888"))
+	})
+
+	It("TestCreateManager_LeaderElectionDisabled", func() {
+		// Mock manager creation
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		var capturedOptions ctrl.Options
+		newManagerFunc = func(restConfig *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			capturedOptions = options
+			return &mockManager{}, nil
+		}
+
+		// Mock CA creation
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+		newCAFunc = func() (*CAHelper, error) {
+			return &CAHelper{}, nil
+		}
+
+		// Mock SetupWithManager
+		origSetupFunc := setupWithManagerFunc
+		defer func() { setupWithManagerFunc = origSetupFunc }()
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+			return nil
+		}
+
+		customConfig := &Config{
+			LeaderElection:         false,
 			LeaderElectionID:       "test-id",
 			MetricsBindAddress:     ":9999",
 			HealthProbeBindAddress: ":8888",
@@ -59,9 +102,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 		_, err := CreateManager(&rest.Config{}, customConfig)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(capturedOptions.LeaderElection).To(BeTrue())
-		Expect(capturedOptions.LeaderElectionID).To(Equal("test-id"))
-		Expect(capturedOptions.HealthProbeBindAddress).To(Equal(":8888"))
+		Expect(capturedOptions.LeaderElection).To(BeFalse())
 	})
 
 	It("TestCreateManager_PassesConfigToReconciler", func() {

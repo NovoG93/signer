@@ -33,10 +33,11 @@ func CreateManager(kubeConfig *rest.Config, config *Config) (ctrl.Manager, error
 	}
 
 	mgrOptions := ctrl.Options{
-		Scheme:                 scheme,
-		HealthProbeBindAddress: config.HealthProbeBindAddress,
-		LeaderElection:         config.LeaderElection,
-		LeaderElectionID:       config.LeaderElectionID,
+		Scheme:                  scheme,
+		HealthProbeBindAddress:  config.HealthProbeBindAddress,
+		LeaderElection:          config.LeaderElection,
+		LeaderElectionID:        config.LeaderElectionID,
+		LeaderElectionNamespace: config.LeaderElectionNamespace,
 	}
 
 	mgr, err := newManagerFunc(kubeConfig, mgrOptions)

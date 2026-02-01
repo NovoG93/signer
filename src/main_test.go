@@ -16,6 +16,9 @@ func TestLoadConfig_Defaults_Extended(t *testing.T) {
 	if config.LeaderElectionID != "signer-controller" {
 		t.Errorf("expected LeaderElectionID 'signer-controller', got %q", config.LeaderElectionID)
 	}
+	if config.LeaderElectionNamespace != "" {
+		t.Errorf("expected LeaderElectionNamespace empty, got %q", config.LeaderElectionNamespace)
+	}
 	if config.MetricsBindAddress != ":8080" {
 		t.Errorf("expected MetricsBindAddress ':8080', got %q", config.MetricsBindAddress)
 	}
@@ -46,6 +49,7 @@ func TestLoadConfig_Overrides_Extended(t *testing.T) {
 	env := map[string]string{
 		"LEADER_ELECTION":           "false",
 		"LEADER_ELECTION_ID":        "my-id",
+		"LEADER_ELECTION_NAMESPACE": "my-ns",
 		"METRICS_BIND_ADDRESS":      ":9090",
 		"HEALTH_PROBE_BIND_ADDRESS": ":9091",
 		"CERT_VALIDITY":             "2h",
@@ -64,6 +68,9 @@ func TestLoadConfig_Overrides_Extended(t *testing.T) {
 	}
 	if config.LeaderElectionID != "my-id" {
 		t.Errorf("expected LeaderElectionID 'my-id', got %q", config.LeaderElectionID)
+	}
+	if config.LeaderElectionNamespace != "my-ns" {
+		t.Errorf("expected LeaderElectionNamespace 'my-ns', got %q", config.LeaderElectionNamespace)
 	}
 	if config.MetricsBindAddress != ":9090" {
 		t.Errorf("expected MetricsBindAddress ':9090', got %q", config.MetricsBindAddress)
@@ -88,5 +95,25 @@ func TestLoadConfig_Overrides_Extended(t *testing.T) {
 	}
 	if config.CAKeyKey != "key.pem" {
 		t.Errorf("expected CAKeyKey 'key.pem', got %q", config.CAKeyKey)
+	}
+}
+
+func TestLoadConfig_PodNamespaceFallback(t *testing.T) {
+	env := map[string]string{
+		"POD_NAMESPACE": "fallback-ns",
+	}
+	getEnv := func(key string) string { return env[key] }
+
+	config := LoadConfig(getEnv)
+
+	if config.LeaderElectionNamespace != "fallback-ns" {
+		t.Errorf("expected LeaderElectionNamespace 'fallback-ns', got %q", config.LeaderElectionNamespace)
+	}
+
+	// Verify priority
+	env["LEADER_ELECTION_NAMESPACE"] = "explicit-ns"
+	config = LoadConfig(getEnv)
+	if config.LeaderElectionNamespace != "explicit-ns" {
+		t.Errorf("expected LeaderElectionNamespace 'explicit-ns', got %q", config.LeaderElectionNamespace)
 	}
 }

@@ -13,18 +13,19 @@ import (
 )
 
 type Config struct {
-	SignerName             string
-	LogLevel               zapcore.Level
-	LeaderElection         bool
-	LeaderElectionID       string
-	MetricsBindAddress     string
-	HealthProbeBindAddress string
-	CertValidity           time.Duration
-	CertRefreshBefore      time.Duration
-	CASecretName           string
-	CASecretNamespace      string
-	CACertKey              string
-	CAKeyKey               string
+	SignerName              string
+	LogLevel                zapcore.Level
+	LeaderElection          bool
+	LeaderElectionID        string
+	LeaderElectionNamespace string
+	MetricsBindAddress      string
+	HealthProbeBindAddress  string
+	CertValidity            time.Duration
+	CertRefreshBefore       time.Duration
+	CASecretName            string
+	CASecretNamespace       string
+	CACertKey               string
+	CAKeyKey                string
 }
 
 func LoadConfig(getEnv func(string) string) *Config {
@@ -51,6 +52,12 @@ func LoadConfig(getEnv func(string) string) *Config {
 	leaderElectionID := getEnv("LEADER_ELECTION_ID")
 	if leaderElectionID == "" {
 		leaderElectionID = "signer-controller"
+	}
+
+	// Parse LeaderElectionNamespace (default: POD_NAMESPACE or "")
+	leaderElectionNamespace := getEnv("LEADER_ELECTION_NAMESPACE")
+	if leaderElectionNamespace == "" {
+		leaderElectionNamespace = getEnv("POD_NAMESPACE")
 	}
 
 	// Parse MetricsBindAddress (default: ":8080")
@@ -98,18 +105,19 @@ func LoadConfig(getEnv func(string) string) *Config {
 	}
 
 	return &Config{
-		SignerName:             signerName,
-		LogLevel:               level,
-		LeaderElection:         leaderElection,
-		LeaderElectionID:       leaderElectionID,
-		MetricsBindAddress:     metricsBindAddress,
-		HealthProbeBindAddress: healthProbeBindAddress,
-		CertValidity:           certValidity,
-		CertRefreshBefore:      certRefreshBefore,
-		CASecretName:           caSecretName,
-		CASecretNamespace:      caSecretNamespace,
-		CACertKey:              caCertKey,
-		CAKeyKey:               caKeyKey,
+		SignerName:              signerName,
+		LogLevel:                level,
+		LeaderElection:          leaderElection,
+		LeaderElectionID:        leaderElectionID,
+		LeaderElectionNamespace: leaderElectionNamespace,
+		MetricsBindAddress:      metricsBindAddress,
+		HealthProbeBindAddress:  healthProbeBindAddress,
+		CertValidity:            certValidity,
+		CertRefreshBefore:       certRefreshBefore,
+		CASecretName:            caSecretName,
+		CASecretNamespace:       caSecretNamespace,
+		CACertKey:               caCertKey,
+		CAKeyKey:                caKeyKey,
 	}
 }
 
