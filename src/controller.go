@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -59,24 +61,67 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
 
+	// Validate public key type (RSA or ECDSA)
+	switch pub.(type) {
+	case *rsa.PublicKey:
+	case *ecdsa.PublicKey:
+	default:
+		return ctrl.Result{}, fmt.Errorf("unsupported public key type: %T", pub)
+	}
+
 	// 4. Create the Certificate (Go Crypto)
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 
-	// Calculate Timings (matching your script's logic)
+	// Calculate Timings
 	now := time.Now()
-	// TODO: Set timings via cli args/env variables and helm values
-	notAfter := now.Add(time.Hour * 1) // 1 Hour Validity
-	refreshAt := now.Add(time.Minute * 30)
+	validity := time.Hour
+	refreshBefore := 30 * time.Minute
+
+	if r.Config != nil {
+		if r.Config.CertValidity > 0 {
+			validity = r.Config.CertValidity
+		}
+		if r.Config.CertRefreshBefore > 0 {
+			refreshBefore = r.Config.CertRefreshBefore
+		}
+	}
+
+	// Cap by MaxExpirationSeconds if present
+	if pcr.Spec.MaxExpirationSeconds != nil {
+		maxValidity := time.Duration(*pcr.Spec.MaxExpirationSeconds) * time.Second
+		if maxValidity < validity {
+			validity = maxValidity
+		}
+	}
+
+	notAfter := now.Add(validity)
+	refreshAt := notAfter.Add(-refreshBefore)
+
+	// RefreshAt must be between NotBefore (now) and NotAfter
+	if refreshAt.Before(now) {
+		refreshAt = now
+	}
+
+	// Phase 5: SANs and Key Usage
+	dnsName := fmt.Sprintf("%s.pod.cluster.local", pcr.Spec.PodName)
 
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: fmt.Sprintf("%s.pod.cluster.local", pcr.Spec.PodName),
+			CommonName: dnsName,
 		},
+		DNSNames:  []string{dnsName},
 		NotBefore: now,
 		NotAfter:  notAfter,
-		// Usually serverAuth + clientAuth
+		// usually serverAuth + clientAuth
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+	}
+
+	// For RSA keys, we might want to add KeyEncipherment as well,
+	// but the requirement only specified DigitalSignature.
+	if _, ok := pub.(*rsa.PublicKey); ok {
+		template.KeyUsage |= x509.KeyUsageKeyEncipherment
 	}
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, &template, r.CA.GetCert(), pub, r.CA.GetKey())

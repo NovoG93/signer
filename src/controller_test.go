@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -583,5 +585,439 @@ var _ = Describe("Reconciler Error Handling", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err).To(Equal(updateErr))
 		})
+	})
+})
+
+var _ = Describe("Reconciler Policy", func() {
+	var (
+		scheme     *runtime.Scheme
+		ctx        context.Context
+		pubKeyDER  []byte
+		reconciler *SignerReconciler
+		clientFunc func(*certificatesv1beta1.PodCertificateRequest) client.Client
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		ctx = context.Background()
+
+		var err error
+		pubKeyDER, err = generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		reconciler = &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+			Config: &Config{
+				CertValidity:      time.Hour,
+				CertRefreshBefore: 30 * time.Minute,
+			},
+		}
+
+		clientFunc = func(pcr *certificatesv1beta1.PodCertificateRequest) client.Client {
+			return fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+		}
+	})
+
+	It("Reconcile_Respects_MaxExpirationSeconds", func() {
+		// Create PCR spec with maxExpirationSeconds=1800 (30 mins)
+		duration := int32(1800)
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pcr-max-expiration",
+				Namespace: "default",
+			},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:           "novog93.ghcr/signer",
+				PodName:              "test-pod",
+				PodUID:               "test-uid",
+				NodeName:             "test-node",
+				NodeUID:              "test-node-uid",
+				ServiceAccountName:   "default",
+				ServiceAccountUID:    "sa-uid",
+				PKIXPublicKey:        pubKeyDER,
+				ProofOfPossession:    []byte("some-proof"),
+				MaxExpirationSeconds: &duration,
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Assert notAfter is capped by maxExpirationSeconds (30m)
+		diff := retrieved.Status.NotAfter.Time.Sub(time.Now())
+		Expect(diff).To(BeNumerically("<=", 30*time.Minute+5*time.Second))
+		Expect(diff).To(BeNumerically(">", 29*time.Minute))
+	})
+
+	It("Reconcile_Uses_Configured_Validity", func() {
+		// Set config.CertValidity = 2h
+		reconciler.Config.CertValidity = 2 * time.Hour
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pcr-config-validity",
+				Namespace: "default",
+			},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PodUID:             "test-uid",
+				NodeName:           "test-node",
+				NodeUID:            "test-node-uid",
+				ServiceAccountName: "default",
+				ServiceAccountUID:  "sa-uid",
+				PKIXPublicKey:      pubKeyDER,
+				ProofOfPossession:  []byte("some-proof"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Reconcile should set notAfter = now + 2h
+		diff := retrieved.Status.NotAfter.Time.Sub(time.Now())
+		Expect(diff).To(BeNumerically("~", 2*time.Hour, 5*time.Second))
+	})
+
+	It("Reconcile_Uses_Configured_Refresh", func() {
+		// Set config.CertRefreshBefore = 45m
+		reconciler.Config.CertValidity = 2 * time.Hour
+		reconciler.Config.CertRefreshBefore = 45 * time.Minute
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pcr-config-refresh",
+				Namespace: "default",
+			},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PodUID:             "test-uid",
+				NodeName:           "test-node",
+				NodeUID:            "test-node-uid",
+				ServiceAccountName: "default",
+				ServiceAccountUID:  "sa-uid",
+				PKIXPublicKey:      pubKeyDER,
+				ProofOfPossession:  []byte("some-proof"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Reconcile should set beginRefreshAt = notAfter - 45m
+		expectedRefreshDuration := (2 * time.Hour) - (45 * time.Minute)
+		diff := retrieved.Status.BeginRefreshAt.Time.Sub(time.Now())
+		Expect(diff).To(BeNumerically("~", expectedRefreshDuration, 5*time.Second))
+	})
+
+	It("Reconcile_Refresh_Within_Bounds", func() {
+		// Should never allow refresh before notBefore or after notAfter
+		reconciler.Config.CertValidity = 10 * time.Minute
+		reconciler.Config.CertRefreshBefore = 20 * time.Minute
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-pcr-refresh-bounds",
+				Namespace: "default",
+			},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PodUID:             "test-uid",
+				NodeName:           "test-node",
+				NodeUID:            "test-node-uid",
+				ServiceAccountName: "default",
+				ServiceAccountUID:  "sa-uid",
+				PKIXPublicKey:      pubKeyDER,
+				ProofOfPossession:  []byte("some-proof"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Check NotBefore <= BeginRefreshAt
+		Expect(retrieved.Status.BeginRefreshAt.Time.Before(retrieved.Status.NotBefore.Time)).To(BeFalse(), "BeginRefreshAt should not be before NotBefore")
+
+		// Check BeginRefreshAt <= NotAfter
+		Expect(retrieved.Status.BeginRefreshAt.Time.After(retrieved.Status.NotAfter.Time)).To(BeFalse(), "BeginRefreshAt should not be after NotAfter")
+	})
+})
+
+// Helper to parse the PEM certificate string from status
+func parseCertificateFromStatus(certChain string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certChain))
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// generateTestPublicKeyDERECDSA creates a test ECDSA public key in DER format
+func generateTestPublicKeyDERECDSA() ([]byte, error) {
+	// Generate ECDSA P-256 key
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	// Export public key in PKIX/DER format
+	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return pubBytes, nil
+}
+
+var _ = Describe("Phase 5: SANs and Key Types", func() {
+	var (
+		scheme     *runtime.Scheme
+		ctx        context.Context
+		reconciler *SignerReconciler
+		clientFunc func(*certificatesv1beta1.PodCertificateRequest) client.Client
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		ctx = context.Background()
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		reconciler = &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+			Config:     &Config{}, // Default config
+		}
+
+		clientFunc = func(pcr *certificatesv1beta1.PodCertificateRequest) client.Client {
+			return fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+		}
+	})
+
+	It("SignCertificate_AddsDNSSAN", func() {
+		pubKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "santest", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:    "novog93.ghcr/signer",
+				PodName:       "test-pod-dns",
+				PKIXPublicKey: pubKey,
+				// Required fields
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Verify DNS SANs
+		Expect(cert.DNSNames).To(ContainElement("test-pod-dns.pod.cluster.local"))
+	})
+
+	It("SignCertificate_SetsSubjectCNToPodName", func() {
+		pubKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "cntest", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:    "novog93.ghcr/signer",
+				PodName:       "my-pod-cn",
+				PKIXPublicKey: pubKey,
+				// Required fields
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Verify CommonName
+		Expect(cert.Subject.CommonName).To(Equal("my-pod-cn.pod.cluster.local"))
+	})
+
+	It("SignCertificate_SupportsRSAKeys", func() {
+		// Existing tests cover this, but explicit test ensures no regression
+		pubKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "rsatest", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "rsa-pod",
+				PKIXPublicKey:      pubKey,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cert.PublicKeyAlgorithm).To(Equal(x509.RSA))
+	})
+
+	It("SignCertificate_SupportsECDSAKeys", func() {
+		pubKey, err := generateTestPublicKeyDERECDSA()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "ecdsatest", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "ecdsa-pod",
+				PKIXPublicKey:      pubKey,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cert.PublicKeyAlgorithm).To(Equal(x509.ECDSA))
+	})
+
+	It("SignCertificate_SetsProperKeyUsage", func() {
+		pubKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "keyusagetest", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "usage-pod",
+				PKIXPublicKey:      pubKey,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+
+		// ExtKeyUsage
+		Expect(cert.ExtKeyUsage).To(ContainElement(x509.ExtKeyUsageClientAuth))
+		Expect(cert.ExtKeyUsage).To(ContainElement(x509.ExtKeyUsageServerAuth))
+
+		// KeyUsage
+		// Should include DigitalSignature (1)
+		Expect(cert.KeyUsage & x509.KeyUsageDigitalSignature).To(Equal(x509.KeyUsageDigitalSignature))
 	})
 })
