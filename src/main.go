@@ -6,24 +6,9 @@ import (
 
 	"go.uber.org/zap/zapcore"
 
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-
-	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
 )
-
-var (
-	scheme = runtime.NewScheme()
-)
-
-func init() {
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	// Register the PCR type so the client understands it
-	utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
-}
 
 func main() {
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -40,20 +25,6 @@ func main() {
 	}
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
-	})
-	if err != nil {
-		log.Fatal(err, "unable to start manager")
-	}
-
-	// Initialize the CA
-	// TODO: Load from a secret
-	ca, err := NewCA()
-	if err != nil {
-		log.Fatal(err, "failed to init CA")
-	}
-
 	// Get signer name from environment variable with default fallback
 	signerName := os.Getenv("SIGNER_NAME")
 	if signerName == "" {
@@ -61,12 +32,9 @@ func main() {
 	}
 	log.Printf("Using signer name: %s", signerName)
 
-	if err = (&SignerReconciler{
-		Client:     mgr.GetClient(),
-		CA:         ca,
-		SignerName: signerName,
-	}).SetupWithManager(mgr); err != nil {
-		log.Fatal(err, "unable to create controller")
+	mgr, err := CreateManager(ctrl.GetConfigOrDie(), signerName)
+	if err != nil {
+		log.Fatal(err, "unable to start manager")
 	}
 
 	log.Println("starting manager")
