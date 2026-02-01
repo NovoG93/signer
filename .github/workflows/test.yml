@@ -1,0 +1,29 @@
+name: Test
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Download dependencies
+        working-directory: ./src
+        run: go mod download
+
+      - name: Run tests
+        working-directory: ./src
+        run: go test -v ./...
+
+      - name: Run vet
+        working-directory: ./src
+        run: go vet ./...
