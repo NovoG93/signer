@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -377,6 +379,209 @@ var _ = Describe("Reconciler Filtering", func() {
 			Expect(retrieved.Status.NotBefore).NotTo(BeNil())
 			Expect(retrieved.Status.NotAfter).NotTo(BeNil())
 			Expect(retrieved.Status.BeginRefreshAt).NotTo(BeNil())
+		})
+	})
+})
+
+// MockClient for error simulation
+type MockClient struct {
+	client.Client
+	MockGet          func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error
+	MockStatusUpdate func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error
+}
+
+func (m *MockClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if m.MockGet != nil {
+		return m.MockGet(ctx, key, obj, opts...)
+	}
+	return m.Client.Get(ctx, key, obj, opts...) // Fallback to inner client
+}
+
+func (m *MockClient) Status() client.StatusWriter {
+	return &MockStatusWriter{
+		StatusWriter: m.Client.Status(),
+		Parent:       m,
+	}
+}
+
+type MockStatusWriter struct {
+	client.StatusWriter
+	Parent *MockClient
+}
+
+func (m *MockStatusWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	if m.Parent.MockStatusUpdate != nil {
+		return m.Parent.MockStatusUpdate(ctx, obj, opts...)
+	}
+	return m.StatusWriter.Update(ctx, obj, opts...)
+}
+
+var _ = Describe("Reconciler Error Handling", func() {
+	var (
+		scheme *runtime.Scheme
+		ctx    context.Context
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		ctx = context.Background()
+	})
+
+	Describe("TestReconcile_InvalidPublicKey", func() {
+		It("should return an error when public key is invalid", func() {
+			pcr := &certificatesv1beta1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pcr-invalid-key",
+					Namespace: "default",
+				},
+				Spec: certificatesv1beta1.PodCertificateRequestSpec{
+					SignerName:         "novog93.ghcr/signer",
+					PodName:            "test-pod",
+					PodUID:             "test-uid",
+					NodeName:           "test-node",
+					NodeUID:            "test-node-uid",
+					ServiceAccountName: "default",
+					ServiceAccountUID:  "sa-uid",
+					PKIXPublicKey:      []byte("invalid-key-garbage"),
+					ProofOfPossession:  []byte("some-proof"),
+				},
+			}
+
+			// Create fake client with the PCR
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				Build()
+
+			// Create reconciler with fake client
+			ca, err := NewCA()
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			// Call Reconcile
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-pcr-invalid-key",
+					Namespace: "default",
+				},
+			})
+
+			// Should return error
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to parse PKIX public key"))
+		})
+	})
+
+	Describe("TestReconcile_GetError", func() {
+		It("should return error when Get fails with non-NotFound error", func() {
+			mockErr := fmt.Errorf("connection refused")
+			mockClient := &MockClient{
+				Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+				MockGet: func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					return mockErr
+				},
+			}
+
+			ca, err := NewCA()
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     mockClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "whatever", Namespace: "default"},
+			})
+
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(Equal(mockErr))
+		})
+
+		It("should ignore NotFound error during Get", func() {
+			// Fake client returns NotFound by default
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+			ca, err := NewCA()
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			_, errCalled := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "missing-pcr", Namespace: "default"},
+			})
+
+			Expect(errCalled).NotTo(HaveOccurred())
+		})
+	})
+
+	Describe("TestReconcile_UpdateStatusError", func() {
+		It("should return error when Status Update fails", func() {
+			pubKeyDER, err := generateTestPublicKeyDER()
+			Expect(err).NotTo(HaveOccurred())
+
+			pcr := &certificatesv1beta1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pcr-update-fail",
+					Namespace: "default",
+				},
+				Spec: certificatesv1beta1.PodCertificateRequestSpec{
+					SignerName:         "novog93.ghcr/signer",
+					PodName:            "test-pod",
+					PodUID:             "test-uid",
+					NodeName:           "test-node",
+					NodeUID:            "test-node-uid",
+					ServiceAccountName: "default",
+					ServiceAccountUID:  "sa-uid",
+					PKIXPublicKey:      pubKeyDER,
+					ProofOfPossession:  []byte("some-proof"),
+				},
+			}
+
+			innerClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+
+			updateErr := fmt.Errorf("failed to update status")
+			mockClient := &MockClient{
+				Client: innerClient,
+				MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					return updateErr
+				},
+			}
+
+			ca, err := NewCA()
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     mockClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-pcr-update-fail",
+					Namespace: "default",
+				},
+			})
+
+			Expect(err).To(HaveOccurred())
+			Expect(err).To(Equal(updateErr))
 		})
 	})
 })

@@ -36,7 +36,13 @@ jobs:
 
       - name: Run tests
         working-directory: ./src
-        run: go test -v ./...
+        run: go test -v -coverprofile=coverage.txt ./...
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./src/coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Run vet
         working-directory: ./src

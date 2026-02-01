@@ -11,7 +11,10 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
 var _ = Describe("ManagerFactory", func() {
@@ -83,3 +86,114 @@ var _ = Describe("ManagerFactory", func() {
 		}, timeout, interval).Should(Equal(200), "Expected health probe to respond with 200 OK")
 	})
 })
+
+var _ = Describe("ManagerFactory Unit", func() {
+	It("should return error if config is nil", func() {
+		// This uses the real newManagerFunc (ctrl.NewManager) which checks config
+		_, err := CreateManager(nil, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("must specify Config"))
+	})
+
+	It("should return error if AddHealthzCheck fails", func() {
+		// Mock manager creation
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		newManagerFunc = func(config *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{
+				addHealthzCheckErr: fmt.Errorf("healthz error"),
+			}, nil
+		}
+
+		_, err := CreateManager(&rest.Config{}, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("healthz error"))
+	})
+
+	It("should return error if AddReadyzCheck fails", func() {
+		// Mock manager creation
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		newManagerFunc = func(config *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{
+				addReadyzCheckErr: fmt.Errorf("readyz error"),
+			}, nil
+		}
+
+		_, err := CreateManager(&rest.Config{}, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("readyz error"))
+	})
+
+	It("should return error if NewCA fails", func() {
+		// Mock manager creation
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		// Mock CA creation
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+
+		newManagerFunc = func(config *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{}, nil
+		}
+
+		newCAFunc = func() (*CAHelper, error) {
+			return nil, fmt.Errorf("ca error")
+		}
+
+		_, err := CreateManager(&rest.Config{}, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ca error"))
+	})
+
+	It("should return error if SetupWithManager fails", func() {
+		// Mock manager creation
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		newManagerFunc = func(config *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{}, nil
+		}
+
+		// Mock CA creation
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+		newCAFunc = func() (*CAHelper, error) {
+			return &CAHelper{}, nil
+		}
+
+		// Mock SetupWithManager
+		origSetupFunc := setupWithManagerFunc
+		defer func() { setupWithManagerFunc = origSetupFunc }()
+
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+			return fmt.Errorf("setup error")
+		}
+
+		_, err := CreateManager(&rest.Config{}, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("setup error"))
+	})
+})
+
+// mockManager implements ctrl.Manager for testing
+type mockManager struct {
+	ctrl.Manager
+	addHealthzCheckErr error
+	addReadyzCheckErr  error
+}
+
+func (m *mockManager) AddHealthzCheck(name string, check healthz.Checker) error {
+	return m.addHealthzCheckErr
+}
+
+func (m *mockManager) AddReadyzCheck(name string, check healthz.Checker) error {
+	return m.addReadyzCheckErr
+}
+
+func (m *mockManager) GetClient() client.Client {
+	return nil
+}

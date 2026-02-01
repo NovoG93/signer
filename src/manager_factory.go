@@ -12,7 +12,12 @@ import (
 )
 
 var (
-	scheme = runtime.NewScheme()
+	scheme               = runtime.NewScheme()
+	newManagerFunc       = ctrl.NewManager
+	newCAFunc            = NewCA
+	setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		return r.SetupWithManager(mgr)
+	}
 )
 
 func init() {
@@ -21,7 +26,7 @@ func init() {
 }
 
 func CreateManager(config *rest.Config, signerName string) (ctrl.Manager, error) {
-	mgr, err := ctrl.NewManager(config, ctrl.Options{
+	mgr, err := newManagerFunc(config, ctrl.Options{
 		Scheme:                 scheme,
 		HealthProbeBindAddress: ":8081",
 	})
@@ -37,16 +42,16 @@ func CreateManager(config *rest.Config, signerName string) (ctrl.Manager, error)
 	}
 
 	// Initialize the CA
-	ca, err := NewCA()
+	ca, err := newCAFunc()
 	if err != nil {
 		return nil, err
 	}
 
-	if err = (&SignerReconciler{
+	if err = setupWithManagerFunc(&SignerReconciler{
 		Client:     mgr.GetClient(),
 		CA:         ca,
 		SignerName: signerName,
-	}).SetupWithManager(mgr); err != nil {
+	}, mgr); err != nil {
 		return nil, err
 	}
 
