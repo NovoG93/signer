@@ -302,7 +302,8 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileProcessesTargetSigner", func() {
 		It("should attempt to process requests from our signer when not yet signed", func() {
 			// Create a PCR with our signer and NO certificate yet
-			pubKeyBase64PEM, err := generateTestPublicKeyPEM()
+			// Use DER format - this matches what Kubernetes kubelet sends (after base64 decoding)
+			pubKeyDER, err := generateTestPublicKeyDER()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -318,7 +319,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					NodeUID:            "node-uid-67890",
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid-abc",
-					PKIXPublicKey:      pubKeyBase64PEM,
+					PKIXPublicKey:      pubKeyDER,
 					ProofOfPossession:  []byte("some-proof"),
 				},
 				Status: certificatesv1beta1.PodCertificateRequestStatus{

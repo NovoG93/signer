@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -22,6 +23,16 @@ var _ = Describe("ManagerFactory", func() {
 	)
 
 	BeforeEach(func() {
+		// Skip if kubebuilder envtest binaries aren't installed
+		// These are typically installed via: make envtest or setup-envtest
+		envtestPath := os.Getenv("KUBEBUILDER_ASSETS")
+		if envtestPath == "" {
+			// Check default location
+			if _, err := os.Stat("/usr/local/kubebuilder/bin/etcd"); os.IsNotExist(err) {
+				Skip("Skipping: kubebuilder envtest binaries not installed. Set KUBEBUILDER_ASSETS or install via setup-envtest.")
+			}
+		}
+
 		ctx, cancel = context.WithCancel(context.Background())
 		testEnv = &envtest.Environment{
 			// We don't have CRDs in the test environment for now,

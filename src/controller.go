@@ -54,18 +54,13 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// 3. Parse the Public Key from the PCR
 	// The Go client library automatically decodes the base64 JSON string into pcr.Spec.PKIXPublicKey ([]byte).
-	// So this byte slice already contains the raw PEM data (starting with -----BEGIN...).
+	// The resulting bytes are in DER format (raw PKIX).
+	// This matches how the kubelet sends the key.
 
 	log.V(1).Info("Parsing public key...", "name", req.Name)
 
-	// PEM decode directly from the bytes
-	pubKeyPEM, _ := pem.Decode(pcr.Spec.PKIXPublicKey)
-	if pubKeyPEM == nil {
-		return ctrl.Result{}, fmt.Errorf("failed to parse PEM block containing the public key")
-	}
-
-	// Third: Parse the actual public key
-	pub, err := x509.ParsePKIXPublicKey(pubKeyPEM.Bytes)
+	// Parse the DER-encoded PKIX public key directly
+	pub, err := x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
