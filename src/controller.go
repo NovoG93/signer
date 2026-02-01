@@ -2,14 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -73,10 +70,10 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Phase 6: Validate Proof of Possession
-	if err := validateProofOfPossession(string(pcr.Spec.ProofOfPossession), pub, pcr.Spec.PKIXPublicKey); err != nil {
-		log.Error(err, "POP validation failed", "name", req.Name)
-		return ctrl.Result{}, err
-	}
+	// NOTE: According to KEP-4317, "Signer implementations do not need to verify
+	// any proof of possession; this is handled by kube-apiserver."
+	// kube-apiserver validates the POP during admission before the PCR reaches us.
+	// We can safely proceed without additional validation.
 
 	// 4. Create the Certificate (Go Crypto)
 	serialNumber, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
@@ -191,47 +188,4 @@ func (r *SignerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certificatesv1beta1.PodCertificateRequest{}).
 		Complete(r)
-}
-
-func validateProofOfPossession(popStr string, pubKey interface{}, pkixPublicKeyBytes []byte) error {
-	if popStr == "" {
-		return fmt.Errorf("empty proof of possession")
-	}
-
-	// Decode the base64-encoded signature
-	signature, err := base64.StdEncoding.DecodeString(popStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode POP as base64: %w", err)
-	}
-
-	if len(signature) == 0 {
-		return fmt.Errorf("empty POP signature")
-	}
-
-	// Hash the public key bytes (this is what the kubelet signs to prove possession)
-	hash := sha256.Sum256(pkixPublicKeyBytes)
-
-	// Verify based on key type
-	switch k := pubKey.(type) {
-	case *rsa.PublicKey:
-		// Verify RSA PKCS#1 v1.5 signature
-		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, hash[:], signature); err != nil {
-			return fmt.Errorf("RSA signature verification failed: %w", err)
-		}
-		return nil
-	case *ecdsa.PublicKey:
-		// ECDSA signature in raw format (r|s concatenation)
-		if len(signature)%2 != 0 {
-			return fmt.Errorf("invalid ECDSA signature length (must be even)")
-		}
-		half := len(signature) / 2
-		r := new(big.Int).SetBytes(signature[:half])
-		s := new(big.Int).SetBytes(signature[half:])
-		if !ecdsa.Verify(k, hash[:], r, s) {
-			return fmt.Errorf("ECDSA signature verification failed")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported public key type: %T", pubKey)
-	}
 }
