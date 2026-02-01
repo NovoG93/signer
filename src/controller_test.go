@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"testing"
@@ -31,37 +35,37 @@ func TestController(t *testing.T) {
 }
 
 // generateTestPublicKeyDER creates a test RSA public key in DER format (PKIX)
-func generateTestPublicKeyDER() ([]byte, error) {
+func generateTestPublicKeyDER() ([]byte, *rsa.PrivateKey, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Export public key in PKIX/DER format
 	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pubBytes, nil
+	return pubBytes, privateKey, nil
 }
 
 // generateTestPublicKeyPEM creates a test RSA public key in PEM format (as []byte)
 // This matches what Kubernetes kubelet sends in PodCertificateRequest.Spec.PKIXPublicKey (after base64 decoding)
-func generateTestPublicKeyPEM() ([]byte, error) {
+func generateTestPublicKeyPEM() ([]byte, *rsa.PrivateKey, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Export public key in PKIX/DER format
 	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Encode as PEM
 	pemBytes := pem.EncodeToMemory(&pem.Block{
 		Type:  "PUBLIC KEY",
 		Bytes: pubBytes,
 	})
-	return pemBytes, nil
+	return pemBytes, privateKey, nil
 }
 
 var _ = Describe("SignerReconciler", func() {
@@ -171,7 +175,7 @@ var _ = Describe("Reconciler Filtering", func() {
 	Describe("TestReconcileIgnoresOtherSigners", func() {
 		It("should ignore requests from other signers and return no error", func() {
 			// Create a PCR with a different signer
-			pubKey, err := generateTestPublicKeyPEM()
+			pubKey, _, err := generateTestPublicKeyPEM()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -238,7 +242,7 @@ var _ = Describe("Reconciler Filtering", func() {
 		It("should ignore already-signed requests for our signer", func() {
 			// Create a PCR with our signer but already signed
 			dummyCert := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHfzfCKvWQMA0GCSqGSIb3DQEBBQUAMBMxETAPBgNVBAMMCExh\nYlNpZ25lclJvb3QwHhcNMjEwNzIxMTgzODEwWhcNMzEwNzE5MTgzODEwWjATMREw\nDwYDVQQDDAhMYWJTaWduZXIwgZ8wDQYJKoZIhvcNAQEBBQADgY0AMIGJAoGBAPFk\nZ1w5s3Y6+LcUzXsWKmVZBgjhFMU2P0c7lxj7W3sW3QKkfSIJWaWLQ8FfNgCWJkkK\n8L6K7HJA7zB6dRFwYW8+N3tMwIABjELcA83ynHZj0/kJ0cQmxQnuPQO4B1EiQxLd\nL5a/wE+3qKKRvB6KSqGsKVf1C0VUDc5XkrFQ7qApAgMBAAEwDQYJKoZIhvcNAQEF\nBQADgYEARN6UJPvJmLhP5N9qJaW5c9NLGpKDg6o4PNPF5GLkFvBL7AiKRQ7A0U2p\nPf8IlUzF3fT/TvLgZBJ7k5/m7kC82bZ3zJ7gHKQJCKqKCVHf3Rk/N3KrJ/+LaLAW\nsL7YhO3DqWdCJ8C9aGe0JTR1K5nfKQ9VqKzRx1aDhEeIIDSLuGM=\n-----END CERTIFICATE-----"
-			pubKey, err := generateTestPublicKeyPEM()
+			pubKey, _, err := generateTestPublicKeyPEM()
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -307,7 +311,9 @@ var _ = Describe("Reconciler Filtering", func() {
 		It("should attempt to process requests from our signer when not yet signed", func() {
 			// Create a PCR with our signer and NO certificate yet
 			// Use DER format - this matches what Kubernetes kubelet sends (after base64 decoding)
-			pubKeyDER, err := generateTestPublicKeyDER()
+			pubKeyDER, privKey, err := generateTestPublicKeyDER()
+			Expect(err).NotTo(HaveOccurred())
+			pop, err := generateRSAJWS(privKey)
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -324,7 +330,7 @@ var _ = Describe("Reconciler Filtering", func() {
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid-abc",
 					PKIXPublicKey:      pubKeyDER,
-					ProofOfPossession:  []byte("some-proof"),
+					ProofOfPossession:  []byte(pop),
 				},
 				Status: certificatesv1beta1.PodCertificateRequestStatus{
 					CertificateChain: "", // Not yet signed
@@ -531,7 +537,9 @@ var _ = Describe("Reconciler Error Handling", func() {
 
 	Describe("TestReconcile_UpdateStatusError", func() {
 		It("should return error when Status Update fails", func() {
-			pubKeyDER, err := generateTestPublicKeyDER()
+			pubKeyDER, privKey, err := generateTestPublicKeyDER()
+			Expect(err).NotTo(HaveOccurred())
+			pop, err := generateRSAJWS(privKey)
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -548,7 +556,7 @@ var _ = Describe("Reconciler Error Handling", func() {
 					ServiceAccountName: "default",
 					ServiceAccountUID:  "sa-uid",
 					PKIXPublicKey:      pubKeyDER,
-					ProofOfPossession:  []byte("some-proof"),
+					ProofOfPossession:  []byte(pop),
 				},
 			}
 
@@ -593,6 +601,7 @@ var _ = Describe("Reconciler Policy", func() {
 		scheme     *runtime.Scheme
 		ctx        context.Context
 		pubKeyDER  []byte
+		pop        string
 		reconciler *SignerReconciler
 		clientFunc func(*certificatesv1beta1.PodCertificateRequest) client.Client
 	)
@@ -604,7 +613,10 @@ var _ = Describe("Reconciler Policy", func() {
 		ctx = context.Background()
 
 		var err error
-		pubKeyDER, err = generateTestPublicKeyDER()
+		var privKey *rsa.PrivateKey
+		pubKeyDER, privKey, err = generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+		pop, err = generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		ca, err := NewCA()
@@ -645,7 +657,7 @@ var _ = Describe("Reconciler Policy", func() {
 				ServiceAccountName:   "default",
 				ServiceAccountUID:    "sa-uid",
 				PKIXPublicKey:        pubKeyDER,
-				ProofOfPossession:    []byte("some-proof"),
+				ProofOfPossession:    []byte(pop),
 				MaxExpirationSeconds: &duration,
 			},
 		}
@@ -685,7 +697,7 @@ var _ = Describe("Reconciler Policy", func() {
 				ServiceAccountName: "default",
 				ServiceAccountUID:  "sa-uid",
 				PKIXPublicKey:      pubKeyDER,
-				ProofOfPossession:  []byte("some-proof"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -724,7 +736,7 @@ var _ = Describe("Reconciler Policy", func() {
 				ServiceAccountName: "default",
 				ServiceAccountUID:  "sa-uid",
 				PKIXPublicKey:      pubKeyDER,
-				ProofOfPossession:  []byte("some-proof"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -764,7 +776,7 @@ var _ = Describe("Reconciler Policy", func() {
 				ServiceAccountName: "default",
 				ServiceAccountUID:  "sa-uid",
 				PKIXPublicKey:      pubKeyDER,
-				ProofOfPossession:  []byte("some-proof"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -788,7 +800,10 @@ var _ = Describe("Reconciler Policy", func() {
 
 	It("Reconcile_Enforces_Min_CertValidity", func() {
 		// Create a config with validity < 1h (e.g., 30m)
-		pubKeyDER, err := generateTestPublicKeyDER()
+		pubKeyDER, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -802,7 +817,7 @@ var _ = Describe("Reconciler Policy", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -850,7 +865,10 @@ var _ = Describe("Reconciler Policy", func() {
 
 	It("Reconcile_Enforces_Min_CertRefreshBefore", func() {
 		// Create a config with refresh < 30m (e.g., 5m)
-		pubKeyDER, err := generateTestPublicKeyDER()
+		pubKeyDER, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -864,7 +882,7 @@ var _ = Describe("Reconciler Policy", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -930,18 +948,18 @@ func parseCertificateFromStatus(certChain string) (*x509.Certificate, error) {
 }
 
 // generateTestPublicKeyDERECDSA creates a test ECDSA public key in DER format
-func generateTestPublicKeyDERECDSA() ([]byte, error) {
+func generateTestPublicKeyDERECDSA() ([]byte, *ecdsa.PrivateKey, error) {
 	// Generate ECDSA P-256 key
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Export public key in PKIX/DER format
 	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return pubBytes, nil
+	return pubBytes, privateKey, nil
 }
 
 var _ = Describe("Phase 5: SANs and Key Types", func() {
@@ -977,7 +995,10 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 	})
 
 	It("SignCertificate_AddsDNSSAN", func() {
-		pubKey, err := generateTestPublicKeyDER()
+		pubKey, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -992,7 +1013,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -1012,7 +1033,10 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 	})
 
 	It("SignCertificate_SetsSubjectCNToPodName", func() {
-		pubKey, err := generateTestPublicKeyDER()
+		pubKey, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1027,7 +1051,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -1048,7 +1072,10 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 
 	It("SignCertificate_SupportsRSAKeys", func() {
 		// Existing tests cover this, but explicit test ensures no regression
-		pubKey, err := generateTestPublicKeyDER()
+		pubKey, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1062,7 +1089,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -1080,7 +1107,10 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 	})
 
 	It("SignCertificate_SupportsECDSAKeys", func() {
-		pubKey, err := generateTestPublicKeyDERECDSA()
+		pubKey, privKey, err := generateTestPublicKeyDERECDSA()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateECDSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1094,7 +1124,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -1112,7 +1142,10 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 	})
 
 	It("SignCertificate_SetsProperKeyUsage", func() {
-		pubKey, err := generateTestPublicKeyDER()
+		pubKey, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pop, err := generateRSAJWS(privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1126,7 +1159,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 				PodUID:             "pod-uid",
 				ServiceAccountName: "sa",
 				ServiceAccountUID:  "sa-uid",
-				ProofOfPossession:  []byte("pop"),
+				ProofOfPossession:  []byte(pop),
 			},
 		}
 
@@ -1148,5 +1181,307 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		// KeyUsage
 		// Should include DigitalSignature (1)
 		Expect(cert.KeyUsage & x509.KeyUsageDigitalSignature).To(Equal(x509.KeyUsageDigitalSignature))
+	})
+})
+
+// Phase 6 POP Validation Helpers
+
+// base64UrlEncode encodes data without padding
+func base64UrlEncode(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func generateRSAJWS(privateKey *rsa.PrivateKey) (string, error) {
+	// 1. Header
+	header := map[string]string{"alg": "RS256"}
+	headerBytes, _ := json.Marshal(header)
+	encodedHeader := base64UrlEncode(headerBytes)
+
+	// 2. Payload
+	payload := []byte("test-payload")
+	encodedPayload := base64UrlEncode(payload)
+
+	// 3. Signature Input
+	signingInput := encodedHeader + "." + encodedPayload
+
+	// 4. Sign
+	hashed := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed[:])
+	if err != nil {
+		return "", err
+	}
+	encodedSignature := base64UrlEncode(signature)
+
+	return signingInput + "." + encodedSignature, nil
+}
+
+func generateECDSAJWS(privateKey *ecdsa.PrivateKey) (string, error) {
+	// 1. Header
+	header := map[string]string{"alg": "ES256"}
+	headerBytes, _ := json.Marshal(header)
+	encodedHeader := base64UrlEncode(headerBytes)
+
+	// 2. Payload
+	payload := []byte("test-payload")
+	encodedPayload := base64UrlEncode(payload)
+
+	// 3. Signature Input
+	signingInput := encodedHeader + "." + encodedPayload
+
+	// 4. Sign
+	hashed := sha256.Sum256([]byte(signingInput))
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+	if err != nil {
+		return "", err
+	}
+
+	// encoding r and s into fixed-width byte arrays (32 bytes each for P-256)
+	curveBits := privateKey.Curve.Params().BitSize
+	keyBytes := (curveBits + 7) / 8
+	rBytes := r.Bytes()
+	rBytesPadded := make([]byte, keyBytes)
+	copy(rBytesPadded[keyBytes-len(rBytes):], rBytes)
+
+	sBytes := s.Bytes()
+	sBytesPadded := make([]byte, keyBytes)
+	copy(sBytesPadded[keyBytes-len(sBytes):], sBytes)
+
+	signature := append(rBytesPadded, sBytesPadded...)
+	encodedSignature := base64UrlEncode(signature)
+
+	return signingInput + "." + encodedSignature, nil
+}
+
+var _ = Describe("Phase 6: POP Validation", func() {
+	var (
+		scheme     *runtime.Scheme
+		ctx        context.Context
+		reconciler *SignerReconciler
+		clientFunc func(*certificatesv1beta1.PodCertificateRequest) client.Client
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		ctx = context.Background()
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		reconciler = &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+			Config:     &Config{},
+		}
+
+		clientFunc = func(pcr *certificatesv1beta1.PodCertificateRequest) client.Client {
+			return fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+		}
+	})
+
+	It("ValidatePOP_AcceptsValidRSASignature", func() {
+		// Generate key pair
+		pk, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Generate valid JWS
+		jws, err := generateRSAJWS(pk)
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "valid-rsa-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:        "novog93.ghcr/signer",
+				PodName:           "pod-rsa",
+				PKIXPublicKey:     pubBytes,
+				ProofOfPossession: []byte(jws),
+				// Required fields
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred()) // Should succeed
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieved.Status.CertificateChain).NotTo(BeEmpty())
+	})
+
+	It("ValidatePOP_RejectsInvalidRSASignature", func() {
+		pk, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		jws, err := generateRSAJWS(pk)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Tamper with signature (last char)
+		badJWS := jws[:len(jws)-5] + "XXXXX"
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "invalid-rsa-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "pod-rsa",
+				PKIXPublicKey:      pubBytes,
+				ProofOfPossession:  []byte(badJWS),
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("signature verification failed"))
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieved.Status.CertificateChain).To(BeEmpty())
+	})
+
+	It("ValidatePOP_AcceptsValidECDSASignature", func() {
+		pk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		jws, err := generateECDSAJWS(pk)
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "valid-ecdsa-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "pod-ecdsa",
+				PKIXPublicKey:      pubBytes,
+				ProofOfPossession:  []byte(jws),
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieved.Status.CertificateChain).NotTo(BeEmpty())
+	})
+
+	It("ValidatePOP_RejectsInvalidECDSASignature", func() {
+		pk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		jws, err := generateECDSAJWS(pk)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Tamper with signature
+		badJWS := jws[:len(jws)-5] + "XXXXX"
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "invalid-ecdsa-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "pod-ecdsa",
+				PKIXPublicKey:      pubBytes,
+				ProofOfPossession:  []byte(badJWS),
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("signature verification failed"))
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retrieved.Status.CertificateChain).To(BeEmpty())
+	})
+
+	It("ValidatePOP_RejectsMalformedJWS", func() {
+		pk, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "malformed-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "pod-malformed",
+				PKIXPublicKey:      pubBytes,
+				ProofOfPossession:  []byte("bad.format"), // Missing parts
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid JWS format"))
+	})
+
+	It("ValidatePOP_RejectsEmptyPOP", func() {
+		pk, err := rsa.GenerateKey(rand.Reader, 2048)
+		Expect(err).NotTo(HaveOccurred())
+		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "empty-pop", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "pod-empty",
+				PKIXPublicKey:      pubBytes,
+				ProofOfPossession:  []byte(""), // Empty
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+			},
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("empty proof of possession"))
 	})
 })

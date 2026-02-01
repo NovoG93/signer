@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -67,6 +71,12 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	case *ecdsa.PublicKey:
 	default:
 		return ctrl.Result{}, fmt.Errorf("unsupported public key type: %T", pub)
+	}
+
+	// Phase 6: Validate Proof of Possession
+	if err := validateProofOfPossession(pcr.Spec.ProofOfPossession, pub); err != nil {
+		log.Error(err, "POP validation failed", "name", req.Name)
+		return ctrl.Result{}, err
 	}
 
 	// 4. Create the Certificate (Go Crypto)
@@ -182,4 +192,50 @@ func (r *SignerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certificatesv1beta1.PodCertificateRequest{}).
 		Complete(r)
+}
+
+func validateProofOfPossession(pop []byte, pubKey interface{}) error {
+	jws := string(pop)
+	if jws == "" {
+		return fmt.Errorf("empty proof of possession")
+	}
+
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid JWS format: expected 3 parts, got %d", len(parts))
+	}
+
+	headerStr, payloadStr, signatureStr := parts[0], parts[1], parts[2]
+
+	// We don't strictly need to parse header/payload JSON properly to verify signature,
+	// but we need the raw bytes for verification message: ASCII(header + "." + payload)
+
+	signature, err := base64.RawURLEncoding.DecodeString(signatureStr)
+	if err != nil {
+		return fmt.Errorf("invalid signature encoding: %v", err)
+	}
+
+	signedContent := headerStr + "." + payloadStr
+	hashed := sha256.Sum256([]byte(signedContent))
+
+	switch k := pubKey.(type) {
+	case *rsa.PublicKey:
+		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, hashed[:], signature); err != nil {
+			return fmt.Errorf("signature verification failed: %v", err)
+		}
+		return nil
+	case *ecdsa.PublicKey:
+		if len(signature) == 0 || len(signature)%2 != 0 {
+			return fmt.Errorf("invalid ECDSA signature length")
+		}
+		half := len(signature) / 2
+		r := new(big.Int).SetBytes(signature[:half])
+		s := new(big.Int).SetBytes(signature[half:])
+		if ecdsa.Verify(k, hashed[:], r, s) {
+			return nil
+		}
+		return fmt.Errorf("signature verification failed")
+	default:
+		return fmt.Errorf("unsupported key type for validation")
+	}
 }
