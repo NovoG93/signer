@@ -13,7 +13,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -74,8 +73,8 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Phase 6: Validate Proof of Possession
-	if err := validateProofOfPossession(pcr.Spec.ProofOfPossession, pub); err != nil {
-		log.Error(err, "POP validation failed", "name", req.Name, "pop_length", len(pcr.Spec.ProofOfPossession), "pop_first_chars", string(pcr.Spec.ProofOfPossession[:min(50, len(pcr.Spec.ProofOfPossession))]))
+	if err := validateProofOfPossession(string(pcr.Spec.ProofOfPossession), pub, pcr.Spec.PKIXPublicKey); err != nil {
+		log.Error(err, "POP validation failed", "name", req.Name)
 		return ctrl.Result{}, err
 	}
 
@@ -194,48 +193,45 @@ func (r *SignerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func validateProofOfPossession(pop []byte, pubKey interface{}) error {
-	jws := string(pop)
-	if jws == "" {
+func validateProofOfPossession(popStr string, pubKey interface{}, pkixPublicKeyBytes []byte) error {
+	if popStr == "" {
 		return fmt.Errorf("empty proof of possession")
 	}
 
-	parts := strings.Split(jws, ".")
-	if len(parts) != 3 {
-		return fmt.Errorf("invalid JWS format: expected 3 parts, got %d", len(parts))
-	}
-
-	headerStr, payloadStr, signatureStr := parts[0], parts[1], parts[2]
-
-	// We don't strictly need to parse header/payload JSON properly to verify signature,
-	// but we need the raw bytes for verification message: ASCII(header + "." + payload)
-
-	signature, err := base64.RawURLEncoding.DecodeString(signatureStr)
+	// Decode the base64-encoded signature
+	signature, err := base64.StdEncoding.DecodeString(popStr)
 	if err != nil {
-		return fmt.Errorf("invalid signature encoding: %v", err)
+		return fmt.Errorf("failed to decode POP as base64: %w", err)
 	}
 
-	signedContent := headerStr + "." + payloadStr
-	hashed := sha256.Sum256([]byte(signedContent))
+	if len(signature) == 0 {
+		return fmt.Errorf("empty POP signature")
+	}
 
+	// Hash the public key bytes (this is what the kubelet signs to prove possession)
+	hash := sha256.Sum256(pkixPublicKeyBytes)
+
+	// Verify based on key type
 	switch k := pubKey.(type) {
 	case *rsa.PublicKey:
-		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, hashed[:], signature); err != nil {
-			return fmt.Errorf("signature verification failed: %v", err)
+		// Verify RSA PKCS#1 v1.5 signature
+		if err := rsa.VerifyPKCS1v15(k, crypto.SHA256, hash[:], signature); err != nil {
+			return fmt.Errorf("RSA signature verification failed: %w", err)
 		}
 		return nil
 	case *ecdsa.PublicKey:
-		if len(signature) == 0 || len(signature)%2 != 0 {
-			return fmt.Errorf("invalid ECDSA signature length")
+		// ECDSA signature in raw format (r|s concatenation)
+		if len(signature)%2 != 0 {
+			return fmt.Errorf("invalid ECDSA signature length (must be even)")
 		}
 		half := len(signature) / 2
 		r := new(big.Int).SetBytes(signature[:half])
 		s := new(big.Int).SetBytes(signature[half:])
-		if ecdsa.Verify(k, hashed[:], r, s) {
-			return nil
+		if !ecdsa.Verify(k, hash[:], r, s) {
+			return fmt.Errorf("ECDSA signature verification failed")
 		}
-		return fmt.Errorf("signature verification failed")
+		return nil
 	default:
-		return fmt.Errorf("unsupported key type for validation")
+		return fmt.Errorf("unsupported public key type: %T", pubKey)
 	}
 }

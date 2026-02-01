@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"testing"
@@ -313,7 +312,7 @@ var _ = Describe("Reconciler Filtering", func() {
 			// Use DER format - this matches what Kubernetes kubelet sends (after base64 decoding)
 			pubKeyDER, privKey, err := generateTestPublicKeyDER()
 			Expect(err).NotTo(HaveOccurred())
-			pop, err := generateRSAJWS(privKey)
+			pop, err := generateRSASignature(pubKeyDER, privKey)
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -539,7 +538,7 @@ var _ = Describe("Reconciler Error Handling", func() {
 		It("should return error when Status Update fails", func() {
 			pubKeyDER, privKey, err := generateTestPublicKeyDER()
 			Expect(err).NotTo(HaveOccurred())
-			pop, err := generateRSAJWS(privKey)
+			pop, err := generateRSASignature(pubKeyDER, privKey)
 			Expect(err).NotTo(HaveOccurred())
 
 			pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -616,7 +615,7 @@ var _ = Describe("Reconciler Policy", func() {
 		var privKey *rsa.PrivateKey
 		pubKeyDER, privKey, err = generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
-		pop, err = generateRSAJWS(privKey)
+		pop, err = generateRSASignature(pubKeyDER, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		ca, err := NewCA()
@@ -803,7 +802,7 @@ var _ = Describe("Reconciler Policy", func() {
 		pubKeyDER, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKeyDER, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -868,7 +867,7 @@ var _ = Describe("Reconciler Policy", func() {
 		pubKeyDER, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKeyDER, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -998,7 +997,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		pubKey, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKey, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1036,7 +1035,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		pubKey, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKey, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1075,7 +1074,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		pubKey, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKey, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1110,7 +1109,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		pubKey, privKey, err := generateTestPublicKeyDERECDSA()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateECDSAJWS(privKey)
+		pop, err := generateECDSASignature(pubKey, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1145,7 +1144,7 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 		pubKey, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
 
-		pop, err := generateRSAJWS(privKey)
+		pop, err := generateRSASignature(pubKey, privKey)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1191,51 +1190,31 @@ func base64UrlEncode(data []byte) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-func generateRSAJWS(privateKey *rsa.PrivateKey) (string, error) {
-	// 1. Header
-	header := map[string]string{"alg": "RS256"}
-	headerBytes, _ := json.Marshal(header)
-	encodedHeader := base64UrlEncode(headerBytes)
+func generateRSASignature(pubKeyBytes []byte, privateKey *rsa.PrivateKey) (string, error) {
+	// Hash the public key bytes (this is what kubelet signs for POP)
+	hash := sha256.Sum256(pubKeyBytes)
 
-	// 2. Payload
-	payload := []byte("test-payload")
-	encodedPayload := base64UrlEncode(payload)
-
-	// 3. Signature Input
-	signingInput := encodedHeader + "." + encodedPayload
-
-	// 4. Sign
-	hashed := sha256.Sum256([]byte(signingInput))
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed[:])
+	// Sign with RSA PKCS#1 v1.5
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hash[:])
 	if err != nil {
 		return "", err
 	}
-	encodedSignature := base64UrlEncode(signature)
 
-	return signingInput + "." + encodedSignature, nil
+	// Return as base64-encoded string (not base64url, matching kubelet behavior)
+	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
-func generateECDSAJWS(privateKey *ecdsa.PrivateKey) (string, error) {
-	// 1. Header
-	header := map[string]string{"alg": "ES256"}
-	headerBytes, _ := json.Marshal(header)
-	encodedHeader := base64UrlEncode(headerBytes)
+func generateECDSASignature(pubKeyBytes []byte, privateKey *ecdsa.PrivateKey) (string, error) {
+	// Hash the public key bytes (this is what kubelet signs for POP)
+	hash := sha256.Sum256(pubKeyBytes)
 
-	// 2. Payload
-	payload := []byte("test-payload")
-	encodedPayload := base64UrlEncode(payload)
-
-	// 3. Signature Input
-	signingInput := encodedHeader + "." + encodedPayload
-
-	// 4. Sign
-	hashed := sha256.Sum256([]byte(signingInput))
-	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hashed[:])
+	// Sign with ECDSA
+	r, s, err := ecdsa.Sign(rand.Reader, privateKey, hash[:])
 	if err != nil {
 		return "", err
 	}
 
-	// encoding r and s into fixed-width byte arrays (32 bytes each for P-256)
+	// Encode r and s into fixed-width byte arrays (32 bytes each for P-256)
 	curveBits := privateKey.Curve.Params().BitSize
 	keyBytes := (curveBits + 7) / 8
 	rBytes := r.Bytes()
@@ -1247,9 +1226,9 @@ func generateECDSAJWS(privateKey *ecdsa.PrivateKey) (string, error) {
 	copy(sBytesPadded[keyBytes-len(sBytes):], sBytes)
 
 	signature := append(rBytesPadded, sBytesPadded...)
-	encodedSignature := base64UrlEncode(signature)
 
-	return signingInput + "." + encodedSignature, nil
+	// Return as base64-encoded string (not base64url)
+	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
 var _ = Describe("Phase 6: POP Validation", func() {
@@ -1291,8 +1270,8 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
 		Expect(err).NotTo(HaveOccurred())
 
-		// Generate valid JWS
-		jws, err := generateRSAJWS(pk)
+		// Generate valid signature (base64-encoded raw signature)
+		sig, err := generateRSASignature(pubBytes, pk)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1301,7 +1280,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 				SignerName:        "novog93.ghcr/signer",
 				PodName:           "pod-rsa",
 				PKIXPublicKey:     pubBytes,
-				ProofOfPossession: []byte(jws),
+				ProofOfPossession: []byte(sig),
 				// Required fields
 				NodeName:           "node1",
 				NodeUID:            "node-uid",
@@ -1327,11 +1306,11 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
 		Expect(err).NotTo(HaveOccurred())
 
-		jws, err := generateRSAJWS(pk)
+		sig, err := generateRSASignature(pubBytes, pk)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Tamper with signature (last char)
-		badJWS := jws[:len(jws)-5] + "XXXXX"
+		badSig := sig[:len(sig)-5] + "XXXXX"
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
 			ObjectMeta: metav1.ObjectMeta{Name: "invalid-rsa-pop", Namespace: "default"},
@@ -1339,7 +1318,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 				SignerName:         "novog93.ghcr/signer",
 				PodName:            "pod-rsa",
 				PKIXPublicKey:      pubBytes,
-				ProofOfPossession:  []byte(badJWS),
+				ProofOfPossession:  []byte(badSig),
 				NodeName:           "node1",
 				NodeUID:            "node-uid",
 				PodUID:             "pod-uid",
@@ -1365,7 +1344,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
 		Expect(err).NotTo(HaveOccurred())
 
-		jws, err := generateECDSAJWS(pk)
+		sig, err := generateECDSASignature(pubBytes, pk)
 		Expect(err).NotTo(HaveOccurred())
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
@@ -1374,7 +1353,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 				SignerName:         "novog93.ghcr/signer",
 				PodName:            "pod-ecdsa",
 				PKIXPublicKey:      pubBytes,
-				ProofOfPossession:  []byte(jws),
+				ProofOfPossession:  []byte(sig),
 				NodeName:           "node1",
 				NodeUID:            "node-uid",
 				PodUID:             "pod-uid",
@@ -1399,11 +1378,11 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
 		Expect(err).NotTo(HaveOccurred())
 
-		jws, err := generateECDSAJWS(pk)
+		sig, err := generateECDSASignature(pubBytes, pk)
 		Expect(err).NotTo(HaveOccurred())
 
 		// Tamper with signature
-		badJWS := jws[:len(jws)-5] + "XXXXX"
+		badSig := sig[:len(sig)-5] + "XXXXX"
 
 		pcr := &certificatesv1beta1.PodCertificateRequest{
 			ObjectMeta: metav1.ObjectMeta{Name: "invalid-ecdsa-pop", Namespace: "default"},
@@ -1411,7 +1390,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 				SignerName:         "novog93.ghcr/signer",
 				PodName:            "pod-ecdsa",
 				PKIXPublicKey:      pubBytes,
-				ProofOfPossession:  []byte(badJWS),
+				ProofOfPossession:  []byte(badSig),
 				NodeName:           "node1",
 				NodeUID:            "node-uid",
 				PodUID:             "pod-uid",
@@ -1431,7 +1410,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		Expect(retrieved.Status.CertificateChain).To(BeEmpty())
 	})
 
-	It("ValidatePOP_RejectsMalformedJWS", func() {
+	It("ValidatePOP_RejectsMalformedBase64", func() {
 		pk, err := rsa.GenerateKey(rand.Reader, 2048)
 		Expect(err).NotTo(HaveOccurred())
 		pubBytes, err := x509.MarshalPKIXPublicKey(&pk.PublicKey)
@@ -1443,7 +1422,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 				SignerName:         "novog93.ghcr/signer",
 				PodName:            "pod-malformed",
 				PKIXPublicKey:      pubBytes,
-				ProofOfPossession:  []byte("bad.format"), // Missing parts
+				ProofOfPossession:  []byte("!!!invalid!base64!!!"), // Invalid base64
 				NodeName:           "node1",
 				NodeUID:            "node-uid",
 				PodUID:             "pod-uid",
@@ -1455,7 +1434,7 @@ var _ = Describe("Phase 6: POP Validation", func() {
 		reconciler.Client = clientFunc(pcr)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("invalid JWS format"))
+		Expect(err.Error()).To(ContainSubstring("failed to decode POP as base64"))
 	})
 
 	It("ValidatePOP_RejectsEmptyPOP", func() {
