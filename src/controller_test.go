@@ -785,6 +785,135 @@ var _ = Describe("Reconciler Policy", func() {
 		// Check BeginRefreshAt <= NotAfter
 		Expect(retrieved.Status.BeginRefreshAt.Time.After(retrieved.Status.NotAfter.Time)).To(BeFalse(), "BeginRefreshAt should not be after NotAfter")
 	})
+
+	It("Reconcile_Enforces_Min_CertValidity", func() {
+		// Create a config with validity < 1h (e.g., 30m)
+		pubKeyDER, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "minvalidity", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PKIXPublicKey:      pubKeyDER,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		// Create reconciler with too-low validity (30m)
+		reconciler := &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+			Config: &Config{
+				CertValidity:      30 * time.Minute, // Too low!
+				CertRefreshBefore: 30 * time.Minute,
+			},
+		}
+
+		clientFunc := func(pcrObj *certificatesv1beta1.PodCertificateRequest) client.Client {
+			return fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcrObj).
+				WithStatusSubresource(pcrObj).
+				Build()
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Despite config saying 30m, the cert should be issued with minimum 1h
+		notAfter := cert.NotAfter
+		now := time.Now()
+		diff := notAfter.Sub(now)
+
+		// Should be approx 1h (allowing for time drift in test execution)
+		Expect(diff).To(BeNumerically(">", 59*time.Minute))
+		Expect(diff).To(BeNumerically("<", 61*time.Minute))
+	})
+
+	It("Reconcile_Enforces_Min_CertRefreshBefore", func() {
+		// Create a config with refresh < 30m (e.g., 5m)
+		pubKeyDER, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "minrefresh", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PKIXPublicKey:      pubKeyDER,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		// Create reconciler with too-low refresh (5m)
+		reconciler := &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+			Config: &Config{
+				CertValidity:      time.Hour,       // OK
+				CertRefreshBefore: 5 * time.Minute, // Too low!
+			},
+		}
+
+		clientFunc := func(pcrObj *certificatesv1beta1.PodCertificateRequest) client.Client {
+			return fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcrObj).
+				WithStatusSubresource(pcrObj).
+				Build()
+		}
+
+		reconciler.Client = clientFunc(pcr)
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		err = reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)
+		Expect(err).NotTo(HaveOccurred())
+
+		cert, err := parseCertificateFromStatus(retrieved.Status.CertificateChain)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Despite config saying 5m refresh, should be 30m
+		notAfter := cert.NotAfter
+		beginRefresh := retrieved.Status.BeginRefreshAt.Time
+
+		// beginRefreshAt should be notAfter - 30m (minimum refresh)
+		expectedRefresh := notAfter.Add(-30 * time.Minute)
+
+		// Allow small time drift
+		diff := beginRefresh.Sub(expectedRefresh)
+		if diff < 0 {
+			diff = -diff
+		}
+		Expect(diff).To(BeNumerically("<", 5*time.Second))
+	})
 })
 
 // Helper to parse the PEM certificate string from status

@@ -86,6 +86,20 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Validate minimum cert validity (must be >= 1h per Kubernetes PCR API spec)
+	const minValidity = time.Hour
+	if validity < minValidity {
+		log.Info("WARN: CertValidity too low, using minimum", "configured", validity, "minimum", minValidity)
+		validity = minValidity
+	}
+
+	// Validate minimum refresh time (should be >= 30m to be practical)
+	const minRefresh = 30 * time.Minute
+	if refreshBefore < minRefresh {
+		log.Info("WARN: CertRefreshBefore too low, using minimum", "configured", refreshBefore, "minimum", minRefresh)
+		refreshBefore = minRefresh
+	}
+
 	// Cap by MaxExpirationSeconds if present
 	if pcr.Spec.MaxExpirationSeconds != nil {
 		maxValidity := time.Duration(*pcr.Spec.MaxExpirationSeconds) * time.Second
