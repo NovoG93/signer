@@ -13,10 +13,26 @@ import (
 	"time"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	IssuedCounter = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "signer_certificates_issued_total",
+		Help: "The total number of certificates issued",
+	})
+	FailedCounter = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "signer_certificates_failed_total",
+		Help: "The total number of failed certificate requests",
+	})
 )
 
 // SignerReconciler watches PCRs
@@ -49,15 +65,14 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// 3. Parse the Public Key from the PCR
-	// The Go client library automatically decodes the base64 JSON string into pcr.Spec.PKIXPublicKey ([]byte).
-	// The resulting bytes are in DER format (raw PKIX).
-	// This matches how the kubelet sends the key.
-
 	log.V(1).Info("Parsing public key...", "name", req.Name)
 
 	// Parse the DER-encoded PKIX public key directly
 	pub, err := x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey)
 	if err != nil {
+		log.Error(err, "Failed to parse PKIX public key")
+		// Set Failed condition and update status
+		r.setFailedCondition(ctx, &pcr, "InvalidPublicKey", fmt.Sprintf("Failed to parse public key: %v", err), req)
 		return ctrl.Result{}, fmt.Errorf("failed to parse PKIX public key: %w", err)
 	}
 
@@ -66,10 +81,12 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	case *rsa.PublicKey:
 	case *ecdsa.PublicKey:
 	default:
-		return ctrl.Result{}, fmt.Errorf("unsupported public key type: %T", pub)
+		errMsg := fmt.Sprintf("unsupported public key type: %T", pub)
+		log.Error(fmt.Errorf("unsupported key type"), errMsg)
+		r.setFailedCondition(ctx, &pcr, "UnsupportedKeyType", errMsg, req)
+		return ctrl.Result{}, fmt.Errorf("%s", errMsg)
 	}
 
-	// Phase 6: Validate Proof of Possession
 	// NOTE: According to KEP-4317, "Signer implementations do not need to verify
 	// any proof of possession; this is handled by kube-apiserver."
 	// kube-apiserver validates the POP during admission before the PCR reaches us.
@@ -122,7 +139,7 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		refreshAt = now
 	}
 
-	// Phase 5: SANs and Key Usage
+	// SANs and Key Usage
 	dnsName := fmt.Sprintf("%s.pod.cluster.local", pcr.Spec.PodName)
 
 	template := x509.Certificate{
@@ -144,8 +161,18 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		template.KeyUsage |= x509.KeyUsageKeyEncipherment
 	}
 
+	// Check if CA is initialized
+	if r.CA == nil {
+		errMsg := "CA not initialized"
+		log.Error(fmt.Errorf("nil CA"), errMsg)
+		r.setFailedCondition(ctx, &pcr, "SigningFailed", errMsg, req)
+		return ctrl.Result{}, fmt.Errorf("%s", errMsg)
+	}
+
 	certBytes, err := x509.CreateCertificate(rand.Reader, &template, r.CA.GetCert(), pub, r.CA.GetKey())
 	if err != nil {
+		log.Error(err, "Failed to create certificate")
+		r.setFailedCondition(ctx, &pcr, "SigningFailed", fmt.Sprintf("Failed to create certificate: %v", err), req)
 		return ctrl.Result{}, err
 	}
 
@@ -175,12 +202,43 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		},
 	}
 
-	if err := r.Status().Update(ctx, &pcr); err != nil {
+	// Use retry for conflict handling
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return r.Status().Update(ctx, &pcr)
+	})
+	if err != nil {
+		log.Error(err, "Failed to update status")
+		// If we get a conflict error, requeue
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, err
+		}
 		return ctrl.Result{}, err
 	}
 
 	log.Info("Certificate issued", "pod", req.Name, "node", pcr.Spec.NodeName)
+	IssuedCounter.Inc()
 	return ctrl.Result{}, nil
+}
+
+// setFailedCondition sets a Failed condition on the PCR and updates its status
+func (r *SignerReconciler) setFailedCondition(ctx context.Context, pcr *certificatesv1beta1.PodCertificateRequest, reason, message string, req ctrl.Request) {
+	log := log.FromContext(ctx)
+
+	pcr.Status.Conditions = []metav1.Condition{
+		{
+			Type:               "Issued",
+			Status:             metav1.ConditionFalse,
+			Reason:             reason,
+			Message:            message,
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+
+	if err := r.Status().Update(ctx, pcr); err != nil {
+		log.Error(err, "Failed to update status with error condition", "reason", reason)
+	}
+
+	FailedCounter.Inc()
 }
 
 // Boilerplate to setup the watch

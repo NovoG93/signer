@@ -18,14 +18,19 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestController(t *testing.T) {
@@ -593,6 +598,220 @@ var _ = Describe("Reconciler Error Handling", func() {
 			Expect(err).To(Equal(updateErr))
 		})
 	})
+
+	Describe("TestReconcile_ParseKeyError_SetsCondition", func() {
+		It("should set Failed condition when public key parsing fails", func() {
+			pcr := &certificatesv1beta1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pcr-invalid-key-condition",
+					Namespace: "default",
+				},
+				Spec: certificatesv1beta1.PodCertificateRequestSpec{
+					SignerName:         "novog93.ghcr/signer",
+					PodName:            "test-pod",
+					PodUID:             "test-uid",
+					NodeName:           "test-node",
+					NodeUID:            "test-node-uid",
+					ServiceAccountName: "default",
+					ServiceAccountUID:  "sa-uid",
+					PKIXPublicKey:      []byte("invalid-key-garbage"),
+					ProofOfPossession:  []byte("some-proof"),
+				},
+			}
+
+			// Create fake client with the PCR
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+
+			// Create reconciler with fake client
+			ca, errCA := NewCA()
+			Expect(errCA).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     fakeClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			// Call Reconcile
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-pcr-invalid-key-condition",
+					Namespace: "default",
+				},
+			})
+
+			// Should return error but also set condition
+			Expect(err).To(HaveOccurred())
+
+			// Retrieve the PCR and check condition was set
+			retrieved := &certificatesv1beta1.PodCertificateRequest{}
+			errGet := fakeClient.Get(ctx, types.NamespacedName{
+				Name:      "test-pcr-invalid-key-condition",
+				Namespace: "default",
+			}, retrieved)
+			Expect(errGet).NotTo(HaveOccurred())
+
+			// Status should have a Failed condition
+			Expect(retrieved.Status.Conditions).NotTo(HaveLen(0))
+			foundCondition := false
+			for _, cond := range retrieved.Status.Conditions {
+				if cond.Type == "Issued" && cond.Status == metav1.ConditionFalse {
+					foundCondition = true
+					Expect(cond.Reason).To(Equal("InvalidPublicKey"))
+					break
+				}
+			}
+			Expect(foundCondition).To(BeTrue(), "Expected to find Failed Issued condition with InvalidPublicKey reason")
+		})
+	})
+
+	Describe("TestReconcile_SigningError_SetsCondition", func() {
+		It("should set Failed condition when certificate signing fails", func() {
+			pubKeyDER, privKey, err := generateTestPublicKeyDER()
+			Expect(err).NotTo(HaveOccurred())
+			pop, err := generateRSASignature(pubKeyDER, privKey)
+			Expect(err).NotTo(HaveOccurred())
+
+			pcr := &certificatesv1beta1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pcr-signing-error",
+					Namespace: "default",
+				},
+				Spec: certificatesv1beta1.PodCertificateRequestSpec{
+					SignerName:         "novog93.ghcr/signer",
+					PodName:            "test-pod",
+					PodUID:             "test-uid",
+					NodeName:           "test-node",
+					NodeUID:            "test-node-uid",
+					ServiceAccountName: "default",
+					ServiceAccountUID:  "sa-uid",
+					PKIXPublicKey:      pubKeyDER,
+					ProofOfPossession:  []byte(pop),
+				},
+			}
+
+			innerClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+
+			// Create a reconciler with a broken CA to cause signing to fail
+			reconciler := &SignerReconciler{
+				Client:     innerClient,
+				CA:         nil, // Null CA will cause signing to fail
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			// Call Reconcile
+			_, err = reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-pcr-signing-error",
+					Namespace: "default",
+				},
+			})
+
+			// Should return error
+			Expect(err).To(HaveOccurred())
+
+			// Retrieve the PCR and check condition was set
+			retrieved := &certificatesv1beta1.PodCertificateRequest{}
+			errGet := innerClient.Get(ctx, types.NamespacedName{
+				Name:      "test-pcr-signing-error",
+				Namespace: "default",
+			}, retrieved)
+			Expect(errGet).NotTo(HaveOccurred())
+
+			// Status should have a Failed condition
+			Expect(retrieved.Status.Conditions).NotTo(HaveLen(0))
+			foundCondition := false
+			for _, cond := range retrieved.Status.Conditions {
+				if cond.Type == "Issued" && cond.Status == metav1.ConditionFalse {
+					foundCondition = true
+					Expect(cond.Reason).To(Equal("SigningFailed"))
+					break
+				}
+			}
+			Expect(foundCondition).To(BeTrue(), "Expected to find Failed Issued condition with SigningFailed reason")
+		})
+	})
+
+	Describe("TestReconcile_StatusUpdateConflict_Retries", func() {
+		It("should retry with backoff when status update conflicts", func() {
+			pubKeyDER, privKey, err := generateTestPublicKeyDER()
+			Expect(err).NotTo(HaveOccurred())
+			pop, err := generateRSASignature(pubKeyDER, privKey)
+			Expect(err).NotTo(HaveOccurred())
+
+			pcr := &certificatesv1beta1.PodCertificateRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pcr-conflict",
+					Namespace: "default",
+				},
+				Spec: certificatesv1beta1.PodCertificateRequestSpec{
+					SignerName:         "novog93.ghcr/signer",
+					PodName:            "test-pod",
+					PodUID:             "test-uid",
+					NodeName:           "test-node",
+					NodeUID:            "test-node-uid",
+					ServiceAccountName: "default",
+					ServiceAccountUID:  "sa-uid",
+					PKIXPublicKey:      pubKeyDER,
+					ProofOfPossession:  []byte(pop),
+				},
+			}
+
+			innerClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(pcr).
+				WithStatusSubresource(pcr).
+				Build()
+
+			// Create a mock client that fails on first update, succeeds on second
+			callCount := 0
+			mockClient := &MockClient{
+				Client: innerClient,
+				MockStatusUpdate: func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					callCount++
+					if callCount == 1 {
+						// First call: conflict
+						return apierrors.NewConflict(schema.GroupResource{}, "test-pcr-conflict", fmt.Errorf("resource version mismatch"))
+					}
+					// Second call: success - use inner client
+					return innerClient.Status().Update(ctx, obj, opts...)
+				},
+			}
+
+			ca, err := NewCA()
+			Expect(err).NotTo(HaveOccurred())
+
+			reconciler := &SignerReconciler{
+				Client:     mockClient,
+				CA:         ca,
+				SignerName: "novog93.ghcr/signer",
+			}
+
+			// Call Reconcile - should succeed despite conflict
+			result, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      "test-pcr-conflict",
+					Namespace: "default",
+				},
+			})
+
+			// The call should eventually succeed (after internal retries via RetryOnConflict)
+			// If retry.RetryOnConflict works correctly, err should be nil
+			Expect(err).NotTo(HaveOccurred(), "Expected reconciliation to succeed after retry")
+			Expect(result.Requeue).To(BeFalse())
+
+			// Verify the mock was called at least once (and ideally twice due to retry)
+			Expect(callCount).To(BeNumerically(">=", 1), "Mock should be called at least once")
+		})
+	})
 })
 
 var _ = Describe("Reconciler Policy", func() {
@@ -961,7 +1180,7 @@ func generateTestPublicKeyDERECDSA() ([]byte, *ecdsa.PrivateKey, error) {
 	return pubBytes, privateKey, nil
 }
 
-var _ = Describe("Phase 5: SANs and Key Types", func() {
+var _ = Describe("SANs and Key Types", func() {
 	var (
 		scheme     *runtime.Scheme
 		ctx        context.Context
@@ -1183,8 +1402,6 @@ var _ = Describe("Phase 5: SANs and Key Types", func() {
 	})
 })
 
-// Phase 6 POP Validation Helpers
-
 // base64UrlEncode encodes data without padding
 func base64UrlEncode(data []byte) string {
 	return base64.RawURLEncoding.EncodeToString(data)
@@ -1231,9 +1448,101 @@ func generateECDSASignature(pubKeyBytes []byte, privateKey *ecdsa.PrivateKey) (s
 	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
-var _ = Describe("Phase 6: POP Validation", func() {
-	// NOTE: According to KEP-4317, signer implementations do not need to verify
-	// proof of possession; kube-apiserver handles this during admission.
-	// POP validation tests have been removed.
-	// All PCRs reaching our signer have already been validated by kube-apiserver.
+func getCounterValue(counter prometheus.Counter) float64 {
+	var m dto.Metric
+	counter.Write(&m)
+	return m.GetCounter().GetValue()
+}
+
+var _ = Describe("Metrics", func() {
+	var (
+		scheme     *runtime.Scheme
+		ctx        context.Context
+		reconciler *SignerReconciler
+	)
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		utilruntime.Must(certificatesv1beta1.AddToScheme(scheme))
+		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+		ctx = context.Background()
+
+		ca, err := NewCA()
+		Expect(err).NotTo(HaveOccurred())
+
+		reconciler = &SignerReconciler{
+			CA:         ca,
+			SignerName: "novog93.ghcr/signer",
+		}
+	})
+
+	It("Metrics_IssuedCounterIncrements", func() {
+		// Reset counter if possible, or just read start value
+		// Since we can't easily reset a package level var without exposing a method, we read current value
+		startVal := getCounterValue(IssuedCounter)
+
+		pubKey, privKey, err := generateTestPublicKeyDER()
+		Expect(err).NotTo(HaveOccurred())
+		pop, err := generateRSASignature(pubKey, privKey)
+		Expect(err).NotTo(HaveOccurred())
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "metrics-issued", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PKIXPublicKey:      pubKey,
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte(pop),
+			},
+		}
+
+		reconciler.Client = fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(pcr).
+			WithStatusSubresource(pcr).
+			Build()
+
+		_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).NotTo(HaveOccurred())
+
+		// Verify counter incremented
+		endVal := getCounterValue(IssuedCounter)
+		Expect(endVal).To(Equal(startVal + 1))
+	})
+
+	It("Metrics_FailedCounterIncrements", func() {
+		startVal := getCounterValue(FailedCounter)
+
+		pcr := &certificatesv1beta1.PodCertificateRequest{
+			ObjectMeta: metav1.ObjectMeta{Name: "metrics-failed", Namespace: "default"},
+			Spec: certificatesv1beta1.PodCertificateRequestSpec{
+				SignerName:         "novog93.ghcr/signer",
+				PodName:            "test-pod",
+				PKIXPublicKey:      []byte("invalid-key"),
+				NodeName:           "node1",
+				NodeUID:            "node-uid",
+				PodUID:             "pod-uid",
+				ServiceAccountName: "sa",
+				ServiceAccountUID:  "sa-uid",
+				ProofOfPossession:  []byte("pop"),
+			},
+		}
+
+		reconciler.Client = fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(pcr).
+			WithStatusSubresource(pcr).
+			Build()
+
+		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
+		Expect(err).To(HaveOccurred()) // Should fail due to invalid key
+
+		endVal := getCounterValue(FailedCounter)
+		Expect(endVal).To(Equal(startVal + 1))
+	})
 })

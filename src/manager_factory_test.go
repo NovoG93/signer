@@ -219,6 +219,38 @@ var _ = Describe("ManagerFactory Unit", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(secretWatcherCalled).To(BeFalse())
 	})
+
+	It("TestCreateManager_UsesMetricsBindAddress", func() {
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+
+		var capturedOptions ctrl.Options
+		newManagerFunc = func(restConfig *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			capturedOptions = options
+			return &mockManager{}, nil
+		}
+
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+		newCAFunc = func() (*CAHelper, error) {
+			return &CAHelper{}, nil
+		}
+
+		origSetupFunc := setupWithManagerFunc
+		defer func() { setupWithManagerFunc = origSetupFunc }()
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+			return nil
+		}
+
+		testConfig := &Config{
+			MetricsBindAddress: ":1234",
+			SignerName:         "test-signer",
+		}
+
+		_, err := CreateManager(&rest.Config{}, testConfig)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capturedOptions.Metrics.BindAddress).To(Equal(":1234"))
+	})
 })
 
 type mockManager struct {

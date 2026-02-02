@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -63,6 +64,7 @@ func CreateManager(kubeConfig *rest.Config, config *Config) (ctrl.Manager, error
 
 	mgrOptions := ctrl.Options{
 		Scheme:                  scheme,
+		Metrics:                 metricsserver.Options{BindAddress: config.MetricsBindAddress},
 		HealthProbeBindAddress:  config.HealthProbeBindAddress,
 		LeaderElection:          config.LeaderElection,
 		LeaderElectionID:        config.LeaderElectionID,
