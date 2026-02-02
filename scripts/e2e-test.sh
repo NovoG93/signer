@@ -7,6 +7,9 @@ KIND_VERSION="0.30.0"
 KUBECTL_VERSION="1.35.0"
 HELM_VERSION="3.20.0"
 ARCH="$(uname -m)"
+if [ "$ARCH" = "x86_64" ]; then
+    ARCH="amd64"
+fi
 TMP_DIR=$(mktemp -d)
 
 echo "Configurations:"
