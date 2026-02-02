@@ -9,6 +9,13 @@ HELM_VERSION="3.20.0"
 ARCH="$(uname -m)"
 TMP_DIR=$(mktemp -d)
 
+echo "Configurations:"
+echo "  KO Version: $KO_VERSION"
+echo "  kind Version: $KIND_VERSION"
+echo "  kubectl Version: $KUBECTL_VERSION"
+echo "  helm Version: $HELM_VERSION"
+echo "  Architecture: $ARCH"
+
 echo "Starting end-to-end tests for signer with local provider..."
 
 # Install kind
