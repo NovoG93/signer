@@ -14,6 +14,10 @@ rules:
 - apiGroups: ["certificates.k8s.io"]
   resources: ["podcertificaterequests/status"]
   verbs: ["get", "patch", "update"]
+# Permission to get secrets (for CA)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
 # Permission to sign certificates
 - apiGroups: ["certificates.k8s.io"]
   resources: ["signers"]

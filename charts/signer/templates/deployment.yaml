@@ -47,6 +47,10 @@ spec:
               value: "{{ .Values.env.leaderElection }}"
             - name: LEADER_ELECTION_ID
               value: "{{ .Values.env.leaderElectionID }}"
+            - name: LEADER_ELECTION_NAMESPACE
+              value: "{{ .Values.env.leaderElectionNamespace }}"
+            - name: MAX_CONCURRENT_RECONCILES
+              value: "{{ .Values.env.maxConcurrentReconciles }}"
             - name: METRICS_BIND_ADDRESS
               value: "{{ .Values.env.metricsBindAddress }}"
             - name: HEALTH_PROBE_BIND_ADDRESS
@@ -56,15 +60,19 @@ spec:
             - name: CERT_REFRESH_BEFORE
               value: "{{ .Values.env.certRefreshBefore }}"
             - name: CA_SECRET_NAME
-              value: "{{ .Values.env.caSecretName }}"
+              value: "{{ if .Values.env.caSecretName }}{{ .Values.env.caSecretName }}{{ else }}{{ include "signer.fullname" . }}-ca{{ end }}"
             - name: CA_SECRET_NAMESPACE
-              value: "{{ .Values.env.caSecretNamespace }}"
+              value: "{{ if .Values.env.caSecretNamespace }}{{ .Values.env.caSecretNamespace }}{{ else }}{{ .Release.Namespace }}{{ end }}"
             - name: CA_CERT_KEY
               value: "{{ .Values.env.caCertKey }}"
             - name: CA_KEY_KEY
               value: "{{ .Values.env.caKeyKey }}"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
-            - name: http
+            - name: metrics
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           {{- with .Values.livenessProbe }}

@@ -79,16 +79,31 @@ env:
   # Leader Election & HA (enabled by default for multi-replica safety)
   leaderElection: "true"
   leaderElectionID: "signer-controller"
+  leaderElectionNamespace: ""
+  # Controller Concurrency
+  # Number of concurrent reconciliation loops. Default is 1 for safety.
+  maxConcurrentReconciles: 1
   # Pod namespace (injected via downward API, do not override)
   podNamespace: ""
   # Metrics & Health Probes
   metricsBindAddress: ":8080"
   healthProbeBindAddress: ":8081"
   # Certificate Validity & Refresh
-  certValidity: "1h"
-  certRefreshBefore: "30m"
-  # CA Secret Configuration (empty = in-memory CA)
+  certValidity: "2m"
+  certRefreshBefore: "30s"
+  # CA Secret Configuration for persistent signing identity
+  # Leave empty for in-memory CA generation (ephemeral, resets on pod restart)
+  # Set to a valid Secret name to load CA from Kubernetes Secret (persistent across restarts)
   caSecretName: ""
   caSecretNamespace: ""
-  caCertKey: "ca.crt"
-  caKeyKey: "ca.key"
+  caCertKey: "ca.crt"          # Key in Secret data containing CA certificate PEM
+  caKeyKey: "ca.key"           # Key in Secret data containing CA private key PEM
+
+# CA Certificate Generation
+# Used only when env.caSecretName is empty
+# Chart will automatically create a self-signed CA Secret with these parameters
+ca:
+  # Common Name for the generated CA certificate
+  commonName: "Lab Signer CA"
+  # CA certificate validity duration (days)
+  validity: 3650  # ~10 years

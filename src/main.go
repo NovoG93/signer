@@ -29,6 +29,7 @@ type Config struct {
 	MaxConcurrentReconciles int
 }
 
+// TODO: Exchange for cli args
 func LoadConfig(getEnv func(string) string) *Config {
 	logLevel := getEnv("LOG_LEVEL")
 	var level zapcore.Level
