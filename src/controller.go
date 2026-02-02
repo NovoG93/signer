@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -242,8 +243,9 @@ func (r *SignerReconciler) setFailedCondition(ctx context.Context, pcr *certific
 }
 
 // Boilerplate to setup the watch
-func (r *SignerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *SignerReconciler) SetupWithManager(mgr ctrl.Manager, options controller.Options) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certificatesv1beta1.PodCertificateRequest{}).
+		WithOptions(options).
 		Complete(r)
 }

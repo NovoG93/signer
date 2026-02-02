@@ -21,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
 
@@ -48,7 +49,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 
 		origSetupFunc := setupWithManagerFunc
 		defer func() { setupWithManagerFunc = origSetupFunc }()
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			return nil
 		}
 
@@ -88,7 +89,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 
 		origSetupFunc := setupWithManagerFunc
 		defer func() { setupWithManagerFunc = origSetupFunc }()
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			return nil
 		}
 
@@ -123,7 +124,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 		defer func() { setupWithManagerFunc = origSetupFunc }()
 
 		var capturedReconciler *SignerReconciler
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			capturedReconciler = r
 			return nil
 		}
@@ -158,7 +159,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 
 		origSetupFunc := setupWithManagerFunc
 		defer func() { setupWithManagerFunc = origSetupFunc }()
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			return nil
 		}
 
@@ -192,7 +193,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 
 		origSetupFunc := setupWithManagerFunc
 		defer func() { setupWithManagerFunc = origSetupFunc }()
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			return nil
 		}
 
@@ -238,7 +239,7 @@ var _ = Describe("ManagerFactory Unit", func() {
 
 		origSetupFunc := setupWithManagerFunc
 		defer func() { setupWithManagerFunc = origSetupFunc }()
-		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
 			return nil
 		}
 
@@ -250,6 +251,70 @@ var _ = Describe("ManagerFactory Unit", func() {
 		_, err := CreateManager(&rest.Config{}, testConfig)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(capturedOptions.Metrics.BindAddress).To(Equal(":1234"))
+	})
+
+	It("Manager_UsesMaxConcurrentReconciles", func() {
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+		newManagerFunc = func(restConfig *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{}, nil
+		}
+
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+		newCAFunc = func() (*CAHelper, error) {
+			return &CAHelper{}, nil
+		}
+
+		origSetupFunc := setupWithManagerFunc
+		defer func() { setupWithManagerFunc = origSetupFunc }()
+
+		var capturedOptions controller.Options
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
+			capturedOptions = opts
+			return nil
+		}
+
+		testConfig := &Config{
+			SignerName:              "test-signer",
+			MaxConcurrentReconciles: 5,
+		}
+
+		_, err := CreateManager(&rest.Config{}, testConfig)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capturedOptions.MaxConcurrentReconciles).To(Equal(5))
+	})
+
+	It("Manager_UsesRateLimiter", func() {
+		origNewManagerFunc := newManagerFunc
+		defer func() { newManagerFunc = origNewManagerFunc }()
+		newManagerFunc = func(restConfig *rest.Config, options ctrl.Options) (ctrl.Manager, error) {
+			return &mockManager{}, nil
+		}
+
+		origNewCAFunc := newCAFunc
+		defer func() { newCAFunc = origNewCAFunc }()
+		newCAFunc = func() (*CAHelper, error) {
+			return &CAHelper{}, nil
+		}
+
+		origSetupFunc := setupWithManagerFunc
+		defer func() { setupWithManagerFunc = origSetupFunc }()
+
+		var capturedOptions controller.Options
+		setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, opts controller.Options) error {
+			capturedOptions = opts
+			return nil
+		}
+
+		testConfig := &Config{
+			SignerName:              "test-signer",
+			MaxConcurrentReconciles: 1, // Ensure non-zero
+		}
+
+		_, err := CreateManager(&rest.Config{}, testConfig)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(capturedOptions.RateLimiter).NotTo(BeNil())
 	})
 })
 

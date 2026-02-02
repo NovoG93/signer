@@ -8,13 +8,16 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -24,8 +27,8 @@ var (
 	scheme               = runtime.NewScheme()
 	newManagerFunc       = ctrl.NewManager
 	newCAFunc            = NewCA
-	setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager) error {
-		return r.SetupWithManager(mgr)
+	setupWithManagerFunc = func(r *SignerReconciler, mgr ctrl.Manager, options controller.Options) error {
+		return r.SetupWithManager(mgr, options)
 	}
 	setupSecretWatcherFunc = func(mgr ctrl.Manager, ca *CAHelper, config *Config) error {
 		return ctrl.NewControllerManagedBy(mgr).
@@ -108,12 +111,19 @@ func CreateManager(kubeConfig *rest.Config, config *Config) (ctrl.Manager, error
 		}
 	}
 
+	ctrlOptions := controller.Options{
+		RateLimiter: workqueue.DefaultTypedControllerRateLimiter[reconcile.Request](),
+	}
+	if config.MaxConcurrentReconciles > 0 {
+		ctrlOptions.MaxConcurrentReconciles = config.MaxConcurrentReconciles
+	}
+
 	if err = setupWithManagerFunc(&SignerReconciler{
 		Client:     mgr.GetClient(),
 		CA:         ca,
 		SignerName: config.SignerName,
 		Config:     config,
-	}, mgr); err != nil {
+	}, mgr, ctrlOptions); err != nil {
 		return nil, err
 	}
 

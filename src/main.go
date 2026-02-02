@@ -26,6 +26,7 @@ type Config struct {
 	CASecretNamespace       string
 	CACertKey               string
 	CAKeyKey                string
+	MaxConcurrentReconciles int
 }
 
 func LoadConfig(getEnv func(string) string) *Config {
@@ -103,6 +104,13 @@ func LoadConfig(getEnv func(string) string) *Config {
 	if caKeyKey == "" {
 		caKeyKey = "ca.key"
 	}
+	// Parse MaxConcurrentReconciles (default: 1)
+	maxConcurrentReconciles := 1
+	if val := getEnv("MAX_CONCURRENT_RECONCILES"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			maxConcurrentReconciles = v
+		}
+	}
 
 	return &Config{
 		SignerName:              signerName,
@@ -118,6 +126,7 @@ func LoadConfig(getEnv func(string) string) *Config {
 		CASecretNamespace:       caSecretNamespace,
 		CACertKey:               caCertKey,
 		CAKeyKey:                caKeyKey,
+		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}
 }
 
