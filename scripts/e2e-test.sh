@@ -184,11 +184,6 @@ images:
     newTag: $SIGNER_TAG
 EOF
 
-echo ""
-echo "Content of ${TMP_DIR}:"
-tree "$TMP_DIR"
-echo ""
-
 cat "$TEMP_KUSTOMIZE_DIR/kustomization.yaml"
 
 # Apply the kustomization
@@ -197,9 +192,9 @@ kubectl kustomize "$TEMP_KUSTOMIZE_DIR" --enable-helm  | kubectl apply -f -
 # add a wait for the deployment to be available
 kubectl wait --for=condition=available --timeout=60s deployment/signer || true
 
-kubectl describe pods -l app=signer
+kubectl describe pods -l app.kubernetes.io/instance=signer
 kubectl describe deployment signer
-kubectl logs -l app=signer
+kubectl logs -l app.kubernetes.io/instance=signer
 
 # Start netshoot pod with PodCertificate volume
 echo "Starting netshoot pod with PodCertificate volume..."
@@ -214,8 +209,11 @@ if kubectl wait --for=condition=ready pod/netshoot --timeout=120s; then
     echo "Netshoot Pod started successfully! Certificate was issued."
 else
     echo "Netshoot Pod failed to start. Debugging..."
+    kubectl describe deployment signer
+    kubectl get po 
+    kubectl logs -l app.kubernetes.io/instance=signer
     kubectl describe pod netshoot
-    kubectl logs -l app=signer
+    kubectl get events --all-namespaces
     exit 1
 fi
 
@@ -223,7 +221,7 @@ fi
 echo "Checking services again..."
 kubectl get podcertificaterequests -A
 kubectl describe pod netshoot
-kubectl logs -l app=signer
+kubectl logs -l app.kubernetes.io/instance=signer
 
 
 echo "End-to-end test completed!"
