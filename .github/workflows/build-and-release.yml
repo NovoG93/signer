@@ -27,7 +27,7 @@ jobs:
   docker:
     name: Build and Release Container Image
     uses: ./.github/workflows/docker.yml
-    needs: [test]
+    needs: [test, e2e]
     if: github.event_name != 'pull_request'
     with:
       is_main_branch: ${{ github.ref == 'refs/heads/main' }}
@@ -40,7 +40,7 @@ jobs:
   binary:
     name: Build and Release Binary
     uses: ./.github/workflows/binary.yml
-    needs: [test]
+    needs: [test, e2e]
     if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
     with:
       go_version: '1.25'
