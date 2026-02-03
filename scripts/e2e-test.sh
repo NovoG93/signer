@@ -127,6 +127,8 @@ image:
   pullPolicy: IfNotPresent
   repository: ko.local
 replicaCount: 1
+podDisruptionBudget:
+  enabled: false
 env:
   signerName: "novog93.ghcr/signer"
   logLevel: "debug"
