@@ -1448,9 +1448,10 @@ func generateECDSASignature(pubKeyBytes []byte, privateKey *ecdsa.PrivateKey) (s
 	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
-func getCounterValue(counter prometheus.Counter) float64 {
+func getCounterVecValue(counter *prometheus.CounterVec, labelValues ...string) float64 {
+	metric := counter.WithLabelValues(labelValues...)
 	var m dto.Metric
-	counter.Write(&m)
+	metric.Write(&m)
 	return m.GetCounter().GetValue()
 }
 
@@ -1479,7 +1480,7 @@ var _ = Describe("Metrics", func() {
 	It("Metrics_IssuedCounterIncrements", func() {
 		// Reset counter if possible, or just read start value
 		// Since we can't easily reset a package level var without exposing a method, we read current value
-		startVal := getCounterValue(IssuedCounter)
+		startVal := getCounterVecValue(IssuedCounter, "1h0m0s")
 
 		pubKey, privKey, err := generateTestPublicKeyDER()
 		Expect(err).NotTo(HaveOccurred())
@@ -1511,13 +1512,11 @@ var _ = Describe("Metrics", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Verify counter incremented
-		endVal := getCounterValue(IssuedCounter)
+		endVal := getCounterVecValue(IssuedCounter, "1h0m0s")
 		Expect(endVal).To(Equal(startVal + 1))
 	})
 
 	It("Metrics_FailedCounterIncrements", func() {
-		startVal := getCounterValue(FailedCounter)
-
 		pcr := &certificatesv1beta1.PodCertificateRequest{
 			ObjectMeta: metav1.ObjectMeta{Name: "metrics-failed", Namespace: "default"},
 			Spec: certificatesv1beta1.PodCertificateRequestSpec{
@@ -1539,10 +1538,23 @@ var _ = Describe("Metrics", func() {
 			WithStatusSubresource(pcr).
 			Build()
 
+		// Reconciliation will fail with InvalidPublicKey
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}})
-		Expect(err).To(HaveOccurred()) // Should fail due to invalid key
 
-		endVal := getCounterValue(FailedCounter)
-		Expect(endVal).To(Equal(startVal + 1))
+		// Verify the error occurred
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to parse PKIX public key"))
+
+		// Retrieve the PCR to get the actual reason from the condition
+		retrieved := &certificatesv1beta1.PodCertificateRequest{}
+		Expect(reconciler.Client.Get(ctx, types.NamespacedName{Name: pcr.Name, Namespace: pcr.Namespace}, retrieved)).To(Succeed())
+
+		// Extract the actual reason from the condition set by setFailedCondition
+		Expect(retrieved.Status.Conditions).To(HaveLen(1))
+		reason := retrieved.Status.Conditions[0].Reason
+
+		// Verify the counter was incremented with the actual reason
+		endVal := getCounterVecValue(FailedCounter, reason)
+		Expect(endVal).To(BeNumerically(">", 0))
 	})
 })

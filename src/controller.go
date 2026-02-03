@@ -20,20 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-)
-
-var (
-	IssuedCounter = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "signer_certificates_issued_total",
-		Help: "The total number of certificates issued",
-	})
-	FailedCounter = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "signer_certificates_failed_total",
-		Help: "The total number of failed certificate requests",
-	})
 )
 
 // SignerReconciler watches PCRs
@@ -46,6 +32,12 @@ type SignerReconciler struct {
 
 // Reconcile is the loop. It receives a Name/Namespace and decides what to do.
 func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		ReconciliationDuration.Observe(duration)
+	}()
+
 	log := log.FromContext(ctx)
 
 	var pcr certificatesv1beta1.PodCertificateRequest
@@ -217,7 +209,11 @@ func (r *SignerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	log.Info("Certificate issued", "pod", req.Name, "node", pcr.Spec.NodeName)
-	IssuedCounter.Inc()
+
+	// Record metrics
+	validityStr := validity.String()
+	IssuedCounter.WithLabelValues(validityStr).Inc()
+
 	return ctrl.Result{}, nil
 }
 
@@ -239,7 +235,8 @@ func (r *SignerReconciler) setFailedCondition(ctx context.Context, pcr *certific
 		log.Error(err, "Failed to update status with error condition", "reason", reason)
 	}
 
-	FailedCounter.Inc()
+	// Record metrics
+	FailedCounter.WithLabelValues(reason).Inc()
 }
 
 // Boilerplate to setup the watch
