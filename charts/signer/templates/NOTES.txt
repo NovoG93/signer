@@ -13,4 +13,3 @@
    kubectl get clusterrolebinding {{ include "signer.fullname" . }}-rolebinding
 
 5. The controller will now watch for PodCertificateRequest resources with signerName: "{{ .Values.env.signerName | default "novog93.ghcr/signer" }}"
-
