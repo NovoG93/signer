@@ -185,8 +185,8 @@ images:
 EOF
 
 echo ""
-echo "Content of ${TEMP_KUSTOMIZE_DIR}:"
-tree "$TEMP_KUSTOMIZE_DIR"
+echo "Content of ${TMP_DIR}:"
+tree "$TMP_DIR"
 echo ""
 
 cat "$TEMP_KUSTOMIZE_DIR/kustomization.yaml"
