@@ -95,7 +95,7 @@ echo "Building signer..."
 pushd ./src >/dev/null 2>&1
 SIGNER_IMAGE_FULL=$(KO_DOCKER_REPO=ko.local VERSION=$(git describe --tags --always --dirty) \
     ko build --tags "$(git describe --tags --always --dirty)" --bare --sbom none \
-    --platform=linux/${ARCH} --local .)
+    --platform=linux/${ARCH} .)
 echo "Built image: $SIGNER_IMAGE_FULL"
 popd >/dev/null 2>&1
 
@@ -119,7 +119,7 @@ mkdir -p "$TEMP_KUSTOMIZE_DIR"
 mkdir -p "$TEMP_CHART_DIR"
 echo "Using temporary kustomize directory: $TEMP_KUSTOMIZE_DIR"
 cp -r kustomize/* "$TEMP_KUSTOMIZE_DIR/"
-cp -r charts/signer/ "$TEMP_CHART_DIR/"
+cp -r charts/signer/. "$TEMP_CHART_DIR/"
 
 # Create values.yaml file on the fly
 cat <<EOF > "$TEMP_KUSTOMIZE_DIR/values.yaml"
