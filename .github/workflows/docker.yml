@@ -56,9 +56,8 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{major}}.{{minor}}.{{patch}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch,prefix=branch-,enable=${{ !inputs.is_main_branch }}
-            type=raw,value=${{ inputs.branch_name }},enable=${{ !inputs.is_main_branch }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=branch-${{ inputs.branch_name }},enable=${{ !inputs.is_main_branch }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -70,40 +69,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       
-      - name: Delete old package versions from current branch
+      - name: Delete old package versions (Pruning)
         uses: actions/delete-package-versions@v5
         with:
-          owner: ${{ github.repository_owner }}
           package-name: 'signer'
           package-type: 'container'
-          min-versions-to-keep: 3
+          min-versions-to-keep: 5
           ignore-versions: |
             latest
             '^(0|[1-9]\\d*)\\.0\\.0$'
-
-      - name: Delete branch-specific versions when merging to main
-        if: inputs.is_main_branch
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{ secrets.token }}
-          script: |
-            const { data: packages } = await github.rest.packages.getAllPackageVersionsForPackageOwnedByAuthenticatedUser({
-              package_type: 'container',
-              package_name: 'signer'
-            });
-            
-            // Filter versions that start with "branch-"
-            const branchVersions = packages.filter(pkg => pkg.name.startsWith('branch-'));
-            
-            for (const pkg of branchVersions) {
-              console.log(`Deleting branch version: ${pkg.name}`);
-              try {
-                await github.rest.packages.deletePackageVersionForAuthenticatedUser({
-                  package_type: 'container',
-                  package_name: 'signer',
-                  package_version_id: pkg.id
-                });
-              } catch (error) {
-                console.log(`Failed to delete ${pkg.name}: ${error.message}`);
-              }
-            }
+            '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$' # Protect semver
