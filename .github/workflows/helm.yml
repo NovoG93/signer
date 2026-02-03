@@ -43,8 +43,9 @@ jobs:
       - name: Set Chart Version
         working-directory: ./charts
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          if [[ "${{ github.ref_type }}" == *"tag"* ]]; then
             VERSION="${GITHUB_REF_NAME#chart-v}"
+            yq e -i '.image.tag = "'${VERSION}'"' signer/values.yaml
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             VERSION="0.0.0-latest"
             yq e -i '.image.tag = "latest"' signer/values.yaml
