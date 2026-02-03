@@ -184,6 +184,11 @@ images:
     newTag: $SIGNER_TAG
 EOF
 
+echo ""
+echo "Content of ${TEMP_KUSTOMIZE_DIR}:"
+tree "$TEMP_KUSTOMIZE_DIR"
+echo ""
+
 cat "$TEMP_KUSTOMIZE_DIR/kustomization.yaml"
 
 # Apply the kustomization
