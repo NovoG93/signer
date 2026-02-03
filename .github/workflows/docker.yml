@@ -57,7 +57,7 @@ jobs:
           tags: |
             type=semver,pattern={{major}}.{{minor}}.{{patch}}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=branch-${{ inputs.branch_name }},enable=${{ !inputs.is_main_branch }}
+            type=raw,value=branch-${{ inputs.branch_name }},enable=${{ !inputs.is_main_branch && !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
