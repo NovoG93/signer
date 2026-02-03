@@ -18,6 +18,11 @@ jobs:
   test:
     name: Run Tests
     uses: ./.github/workflows/test.yml
+  
+  e2e:
+    name: Run End-to-End Tests
+    uses: ./.github/workflows/e2e.yml
+    needs: [test]
 
   docker:
     name: Build and Release Container Image

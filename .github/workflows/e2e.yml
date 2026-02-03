@@ -1,11 +1,10 @@
 name: end to end test
 
 on:
-  push:
-    branches:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   e2e-tests:
