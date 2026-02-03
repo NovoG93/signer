@@ -77,6 +77,9 @@ jobs:
           package-name: 'signer'
           package-type: 'container'
           min-versions-to-keep: 3
+          ignore-versions: |
+            latest
+            '^(0|[1-9]\\d*)\\.0\\.0$'
 
       - name: Delete branch-specific versions when merging to main
         if: inputs.is_main_branch

@@ -1,0 +1,21 @@
+name: end to end test
+
+on:
+  push:
+    branches:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  e2e-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+    - name: Pull Netshoot image
+      run: docker pull nicolaka/netshoot:latest
+    - name: e2e
+      run: |
+        ./scripts/e2e-test.sh
