@@ -67,7 +67,12 @@ if [ -x "$(command -v ko)" ]; then
   echo "ko is already installed"
 else
   echo "Installing ko..."
-  curl -sSfL "https://github.com/ko-build/ko/releases/download/v${KO_VERSION}/ko_${KO_VERSION}_linux_${ARCH}.tar.gz" > ko.tar.gz
+  if [ "$ARCH" = "amd64" ]; then
+    ko_arch="x86_64"
+  else
+    ko_arch="$ARCH"
+  fi
+  curl -sSfL "https://github.com/ko-build/ko/releases/download/v${KO_VERSION}/ko_${KO_VERSION}_linux_${ko_arch}.tar.gz" > ko.tar.gz
   tar xzf ko.tar.gz ko
   chmod +x ./ko
   sudo mv ko /usr/local/bin/ko
