@@ -11,6 +11,11 @@ on:
         description: Current branch name
         type: string
         required: true
+      go_version:
+        description: Go version to use for building the image
+        type: string
+        default: '1.25'
+        required: false
     secrets:
       token:
         description: GitHub token
@@ -37,6 +42,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -69,6 +77,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            GO_VERSION=1.25
       
       - name: Delete old package versions (Pruning)
         uses: actions/delete-package-versions@v5

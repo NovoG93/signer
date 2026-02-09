@@ -32,6 +32,7 @@ jobs:
     with:
       is_main_branch: ${{ github.ref == 'refs/heads/main' }}
       branch_name: ${{ github.ref_name }}
+      go_version: '1.25'
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
       registry_username: ${{ github.actor }}
